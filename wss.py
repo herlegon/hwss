@@ -28,10 +28,17 @@ import uuid
 
 
 class BackendServer:
-    def __init__(self, host="127.0.0.1", port=8442):
+    def __init__(
+        self,
+        shutdown_event: asyncio.Event = None,
+        host="127.0.0.1",
+        port=49990
+    ):
+        self.shutdown_event = shutdown_event
         self.host = host
         self.port = port
         self._server: Server = None
+        self._shutdown_future: asyncio.Future = None
         self._shutting_down: bool = False
         self.clients: dict[str, ClientConnectionHandler] = {}
 
@@ -54,7 +61,8 @@ class BackendServer:
 
 
     async def unregister_client(self, client_id: str) -> None:
-        """Unregister client connection and clean up."""
+        """Unregister client connection and clean up.
+        """
         handler = self.clients.pop(client_id, None)
         if handler:
             print(f"[Server] unregister_client: closing handler")
@@ -63,7 +71,8 @@ class BackendServer:
 
 
     async def handle_new_client(self, server_connection: ServerConnection):
-        """Called by websockets.serve() for each new connection."""
+        """Called by websockets.serve() for each new connection.
+        """
         # Check if we're shutting down before accepting
         if self._shutting_down:
             slog.info("[S] Rejecting connection - server is shutting down")
@@ -87,7 +96,8 @@ class BackendServer:
 
 
     async def broadcast(self, message):
-        """Broadcast message to all connected clients"""
+        """Broadcast message to all connected clients
+        """
         if not self.clients:
             return
 
@@ -100,7 +110,8 @@ class BackendServer:
 
 
     async def run(self):
-        """Start the websocket server."""
+        """Start the websocket server.
+        """
         slog.info(f"Starting WebSocket server on {self.host}:{self.port}")
         self._server = await serve(
             self.handle_new_client,
@@ -108,6 +119,7 @@ class BackendServer:
             self.port,
         )
         slog.info(f"Server listening on {self.host}:{self.port}")
+        print("READY")
 
         #     # Wait indefinitely until shutdown is requested, but cancel is mandatory
         #     try:
@@ -129,7 +141,8 @@ class BackendServer:
 
 
     async def shutdown(self) -> None:
-        """Initiate graceful shutdown sequence"""
+        """Initiate graceful shutdown sequence
+        """
         if self._shutting_down:
             slog.info("[S] Shutdown already in progress")
             return
@@ -174,6 +187,12 @@ class BackendServer:
                 slog.warning(f"  - {child.name} (PID: {child.pid})")
                 slog.warning(f"  Terminating child process {child.name} (PID {child.pid})")
                 child.terminate()
+            
+            # Wait for children to actually exit
+            for child in active_children:
+                child.join(timeout=1.0)
+                if child.is_alive():
+                    slog.error(f"  Child {child.name} (PID {child.pid}) failed to terminate")
 
         # Cancel remaining asyncio tasks (except current)
         current_task = asyncio.current_task()
@@ -236,14 +255,14 @@ async def main():
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument("--host", default="127.0.0.1")
-    parser.add_argument("--port", type=int, default=49999)
+    parser.add_argument("--port", type=int, default=49990)
     args = parser.parse_args()
 
     slog.info("[S] Server starting")
     host, port = args.host, args.port
 
-    server = BackendServer(host=host, port=port)
     shutdown_event = asyncio.Event()
+    server = BackendServer(shutdown_event=shutdown_event, host=host, port=port)
 
     loop: asyncio.AbstractEventLoop | None = None
     if sys.platform == 'linux':

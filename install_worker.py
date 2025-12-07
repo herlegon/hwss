@@ -53,6 +53,7 @@ class InstallWorker(mp.Process):
         self.task_queue: mp.Queue = task_queue
         self.result_queue: mp.Queue = result_queue
         self.stop_event: mp.Event = stop_event
+        self.daemon = True
 
         self.product_name: str = "hconvert"
         self.reinstall: bool = False

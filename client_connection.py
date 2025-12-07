@@ -114,7 +114,11 @@ class ClientConnectionHandler:
 
         elif cmd == "shutdown":
             slog.debug("route shutdown message")
-            await self.close()
+            if self.server and self.server.shutdown_event:
+                self.server.shutdown_event.set()
+            else:
+                slog.warning("No server or shutdown_event reference, force closing client")
+                await self.close()
 
         # 2. Setup/Install Messages (Only if needed)
         # You can add logic here to handle "install_packages" command
