@@ -145,6 +145,8 @@ class ClientConnectionHandler:
         """
         try:
             async for msg in self.server_connection:
+                if self.server:
+                    self.server.update_activity()
                 await self.route_message(msg)
 
         except asyncio.CancelledError:

@@ -27,6 +27,8 @@ import uuid
 # logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(message)s")
 
 
+import time
+
 class BackendServer:
     def __init__(
         self,
@@ -42,12 +44,21 @@ class BackendServer:
         self._shutting_down: bool = False
         self.clients: dict[str, ClientConnectionHandler] = {}
 
+        # Shutdown logic tracking
+        self.start_time = time.time()
+        self.last_activity_time = time.time()
+        self.has_ever_connected = False
+        self.last_client_disconnect_time = None
+
 
     def register_client(self, server_connection: ServerConnection) -> str | None:
         """Register a new client connection, returns the uuid"""
         if self._shutting_down:
             slog.warning("Refusing new connection - server is shutting down")
             return None
+
+        self.has_ever_connected = True
+        self.update_activity()
 
         client_id = str(uuid.uuid4())
         handler = ClientConnectionHandler(
@@ -67,6 +78,10 @@ class BackendServer:
         if handler:
             print(f"[Server] unregister_client: closing handler")
             await handler.close()
+
+        if not self.clients:
+            self.last_client_disconnect_time = time.time()
+
         print(f"[Server] Client {client_id} disconnected (total={len(self.clients)})")
 
 
@@ -109,9 +124,47 @@ class BackendServer:
         )
 
 
+    def update_activity(self):
+        """Update the last activity timestamp."""
+        self.last_activity_time = time.time()
+
+
+    async def _monitor_shutdown_task(self):
+        slog.info("[S] Starting shutdown monitor")
+        while not self._shutting_down:
+            await asyncio.sleep(1)
+            now = time.time()
+            client_count = len(self.clients)
+
+            # 1. No client ever connected: shutdown after 10s
+            if not self.has_ever_connected:
+                if now - self.start_time > 10:
+                    slog.warning("[S] Shutdown monitor: No client connected within 10s")
+                    if self.shutdown_event:
+                        self.shutdown_event.set()
+                    return
+
+            # 2. Client was connected: shutdown after 5s if no client anymore
+            if self.has_ever_connected and client_count == 0:
+                if self.last_client_disconnect_time and (now - self.last_client_disconnect_time > 5):
+                     slog.warning("[S] Shutdown monitor: No clients for 5s after previous connection")
+                     if self.shutdown_event:
+                        self.shutdown_event.set()
+                     return
+
+            # 3. Client is connected but no message received within 8s
+            if client_count > 0:
+                if now - self.last_activity_time > 8:
+                    slog.warning(f"[S] Shutdown monitor: Inactive for 8s (last activity: {now - self.last_activity_time:.1f}s ago)")
+                    if self.shutdown_event:
+                        self.shutdown_event.set()
+                    return
+
+
     async def run(self):
         """Start the websocket server.
         """
+        asyncio.create_task(self._monitor_shutdown_task())
         slog.info(f"Starting WebSocket server on {self.host}:{self.port}")
         self._server = await serve(
             self.handle_new_client,
