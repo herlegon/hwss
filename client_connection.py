@@ -95,6 +95,23 @@ class ClientConnectionHandler:
         if cmd == "heartbeat":
             await self.to_client.put(WorkerResponse(type="pong"))
 
+        elif cmd == "identify":
+            client_count = len(self.server.clients) if self.server else 0
+            response = WorkerResponse(
+                type="server_identity",
+                payload={
+                    "name": "herlegon install",
+                    "clients": client_count
+                }
+            )
+            await self.to_client.put(response)
+
+        elif cmd == "stop":
+            slog.info(f"[{self.client_id}] Received stop command")
+            if self.server:
+                # Schedule shutdown on the event loop to avoid blocking current handler
+                asyncio.create_task(self.server.shutdown())
+
         elif cmd == "shutdown":
             slog.debug("route shutdown message")
             await self.close()

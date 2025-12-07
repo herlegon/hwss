@@ -164,7 +164,7 @@ class BackendServer:
         if self._server:
             self._server.close()
             await self._server.wait_closed()
-        slog.info("[S] Server shutdown complete.")
+        slog.info("[S] Server shutdown")
 
         # Terminate remaining child processes if any
         active_children = mp.active_children()
@@ -233,8 +233,14 @@ def setup_signal_handlers(
 
 
 async def main():
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--host", default="127.0.0.1")
+    parser.add_argument("--port", type=int, default=49999)
+    args = parser.parse_args()
+
     slog.info("[S] Server starting")
-    host, port = "127.0.0.1", 8442
+    host, port = args.host, args.port
 
     server = BackendServer(host=host, port=port)
     shutdown_event = asyncio.Event()
