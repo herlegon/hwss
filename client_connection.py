@@ -6,6 +6,7 @@ import multiprocessing as mp
 import os
 from pprint import pprint
 import queue
+import sys
 import websockets
 from install_worker import InstallWorker
 from hytils import lightblue, lightcyan, purple, red, yellow
@@ -78,6 +79,7 @@ class ClientConnectionHandler:
             self.start_worker(self.worker_name)
 
 
+
     async def route_message(self, msg):
         """
         Decide whether to forward to a worker or handle as control message.
@@ -89,30 +91,34 @@ class ClientConnectionHandler:
             slog.warning(f"⚠️ Received invalid JSON: {msg}")
             return
 
-        cmd: str = msg.get("cmd", "")
+        request: str = msg.get('type', "")
         # print(lightblue(f"<<< {cmd}"))
 
-        if cmd == "heartbeat":
+        if request == 'heartbeat':
             await self.to_client.put(WorkerResponse(type="pong"))
 
-        elif cmd == "identify":
+
+        elif request == 'identify':
             client_count = len(self.server.clients) if self.server else 0
             response = WorkerResponse(
-                type="server_identity",
+                type='identity',
                 payload={
-                    "name": "herlegon install",
-                    "clients": client_count
+                    'organization': "herlegon",
+                    'app': 'setup',
+                    'clients': client_count
                 }
             )
             await self.to_client.put(response)
 
-        elif cmd == "stop":
+
+        elif request == "stop":
             slog.info(f"[{self.client_id}] Received stop command")
             if self.server:
                 # Schedule shutdown on the event loop to avoid blocking current handler
                 asyncio.create_task(self.server.shutdown())
 
-        elif cmd == "shutdown":
+
+        elif request == 'shutdown':
             slog.debug("route shutdown message")
             if self.server and self.server.shutdown_event:
                 self.server.shutdown_event.set()
@@ -120,23 +126,31 @@ class ClientConnectionHandler:
                 slog.warning("No server or shutdown_event reference, force closing client")
                 await self.close()
 
+
+        elif request == "restart":
+            os.execv(sys.executable, [sys.executable] + sys.argv)
+            return
+
+
         # 2. Setup/Install Messages (Only if needed)
         # You can add logic here to handle "install_packages" command
         # even if the worker is missing.
-        elif cmd == "install":
+        elif request == 'setup':
             if self.install_worker_name not in self.workers.keys():
                 self.start_worker(self.install_worker_name)
             self.submit_task_to_worker(self.install_worker_name, msg)
 
 
-        elif cmd in worker_task_list:
+        elif request in worker_task_list:
             if WORKER_AVAILABLE:
                 self.submit_task_to_worker(self.worker_name, msg)
             else:
                 slog.error("Cannot execute task: System is in Setup Mode.")
 
+
         else:
-            slog.warning(lightblue(f"[{self.client_id}] ⚠️ Unknown message type: {cmd}"))
+            slog.warning(lightblue(f"[{self.client_id}] ⚠️ Unknown message type: {request}"))
+
 
 
     async def reception_task(self):
@@ -169,15 +183,15 @@ class ClientConnectionHandler:
     async def send_task(self):
         while not self.closing:
             try:
-                event: WorkerResponse = await asyncio.wait_for(
+                event: WsMsg = await asyncio.wait_for(
                     self.to_client.get(),
                     timeout=0.5
                 )
-                msg: dict = {
+                ws_msg: dict = {
                     "type": event.type,
                     "payload": event.payload
                 }
-                await self.server_connection.send(json.dumps(msg))
+                await self.server_connection.send(json.dumps(ws_msg))
 
             except asyncio.TimeoutError:
                 # No message in queue, check closing and continue
@@ -247,7 +261,7 @@ class ClientConnectionHandler:
         # Optional: notify client of shutdown
         # try:
         #     shutdown_msg = WorkerResponse(
-        #         type="shutdown",
+        #         type='shutdown',
         #         payload="Server is shutting down"
         #     )
         #     await asyncio.wait_for(

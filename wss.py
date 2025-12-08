@@ -32,9 +32,10 @@ import time
 class BackendServer:
     def __init__(
         self,
-        shutdown_event: asyncio.Event = None,
         host="127.0.0.1",
-        port=49990
+        port=49990,
+        shutdown_event: asyncio.Event = None,
+        shutdown_for_inactivity: bool = True,
     ):
         self.shutdown_event = shutdown_event
         self.host = host
@@ -49,6 +50,12 @@ class BackendServer:
         self.last_activity_time = time.time()
         self.has_ever_connected = False
         self.last_client_disconnect_time = None
+
+        if shutdown_for_inactivity:
+            self.has_ever_connected_timeout = 5
+            self.no_new_client_timeout = 5
+            self.inactive_client_timeout = 5
+
 
 
     def register_client(self, server_connection: ServerConnection) -> str | None:
@@ -132,30 +139,40 @@ class BackendServer:
     async def _monitor_shutdown_task(self):
         slog.info("[S] Starting shutdown monitor")
         while not self._shutting_down:
-            await asyncio.sleep(1)
+            await asyncio.sleep(2)
             now = time.time()
             client_count = len(self.clients)
 
             # 1. No client ever connected: shutdown after 10s
-            if not self.has_ever_connected:
-                if now - self.start_time > 10:
+            if self.has_ever_connected_timeout and not self.has_ever_connected:
+                if now - self.start_time > self.has_ever_connected_timeout:
                     slog.warning("[S] Shutdown monitor: No client connected within 10s")
                     if self.shutdown_event:
                         self.shutdown_event.set()
                     return
 
             # 2. Client was connected: shutdown after 5s if no client anymore
-            if self.has_ever_connected and client_count == 0:
-                if self.last_client_disconnect_time and (now - self.last_client_disconnect_time > 5):
-                     slog.warning("[S] Shutdown monitor: No clients for 5s after previous connection")
+            if (
+                self.no_new_client_timeout
+                and self.has_ever_connected
+                and client_count == 0
+            ):
+                if (
+                    self.last_client_disconnect_time
+                    and now - self.last_client_disconnect_time > self.no_new_client_timeout
+                ):
+                     slog.warning("[S] Shutdown monitor: No clients after previous connection")
                      if self.shutdown_event:
                         self.shutdown_event.set()
                      return
 
             # 3. Client is connected but no message received within 8s
-            if client_count > 0:
-                if now - self.last_activity_time > 8:
-                    slog.warning(f"[S] Shutdown monitor: Inactive for 8s (last activity: {now - self.last_activity_time:.1f}s ago)")
+            if (
+                self.inactive_client_timeout
+                and client_count > 0
+            ):
+                if now - self.last_activity_time > self.inactive_client_timeout:
+                    slog.warning(f"[S] Shutdown monitor: Inactive client (last activity: {now - self.last_activity_time:.1f}s ago)")
                     if self.shutdown_event:
                         self.shutdown_event.set()
                     return
@@ -240,7 +257,7 @@ class BackendServer:
                 slog.warning(f"  - {child.name} (PID: {child.pid})")
                 slog.warning(f"  Terminating child process {child.name} (PID {child.pid})")
                 child.terminate()
-            
+
             # Wait for children to actually exit
             for child in active_children:
                 child.join(timeout=1.0)
@@ -315,7 +332,12 @@ async def main():
     host, port = args.host, args.port
 
     shutdown_event = asyncio.Event()
-    server = BackendServer(shutdown_event=shutdown_event, host=host, port=port)
+    server = BackendServer(
+        host=host,
+        port=port,
+        shutdown_event=shutdown_event,
+        shutdown_for_inactivity=True,
+    )
 
     loop: asyncio.AbstractEventLoop | None = None
     if sys.platform == 'linux':

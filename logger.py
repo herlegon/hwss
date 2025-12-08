@@ -8,7 +8,7 @@ class AbbreviatedLevelFilter(logging.Filter):
         logging.INFO: '[I]',
         logging.WARNING: '[W]',
         logging.ERROR: '[E]',
-        logging.CRITICAL: '[E]',  # You can map CRITICAL to [E] as well
+        logging.CRITICAL: '[C]',
     }
 
     def filter(self, record):

@@ -9,14 +9,15 @@ import sys
 import time
 from hytils import lightcyan, lightgreen, purple, red, yellow
 from logger import slog
-from messages import WorkerCommand, WorkerResponse
+from api import WorkerResponse
 import multiprocessing as mp
 from typing import Literal
 
 try:
     from hinstall import __version__
+
 except:
-    dev_dir: str = str(Path(__file__).resolve().parent.parent.parent / "hinstall")
+    dev_dir: str = str(Path(__file__).resolve().parent.parent / "hinstall")
     slog.warning(f"Import hinstall from dev directory: {dev_dir}")
     sys.path.append(dev_dir)
 
@@ -82,7 +83,28 @@ class InstallWorker(mp.Process):
                     slog.info(purple(f"[{self.pid}] ℹ️  received shutdown"))
                     break
 
+                elif task_name == 'parse':
+                    self.handle_parse_cfg(payload)
+
                 elif task_name == 'install':
+                    stage_no = payload.get('stage', -1)
+                    if stage_no == 0:
+                        self.handle_install_ext_packages()
+
+                    if stage_no == 1:
+                        self.handle_install_1st_stage(payload)
+
+                    elif stage_no == 2:
+                        self.handle_install_2nd_stage(payload)
+
+                    else:
+                        self.send_result(
+                            WorkerResponse(
+                                type="error",
+                                payload=f"Not supported stage no: {stage_no}"
+                            )
+                        )
+
                     # if 'hinstall' not in sys.modules:
                     #     try:
                     #         from hinstall import (
@@ -99,8 +121,8 @@ class InstallWorker(mp.Process):
                     #     except Exception as e:
                     #         slog.critical("Failed to import hinstall package")
 
-                    slog.info(purple(f"[{self.pid}] parse {payload}"))
-                    self.handle_parse_cfg(payload)
+                    # slog.info(purple(f"[{self.pid}] parse {payload}"))
+
 
 
                 # else:
@@ -137,32 +159,30 @@ class InstallWorker(mp.Process):
         self.result_queue.put(response)
 
 
-    def get_rehost_dir(self, company: str = "herlegon") -> Path:
+    def get_rehost_dir(self, organization: str = "herlegon") -> Path:
         local_package_dir: Path
 
         if sys.platform == "win32":
-            local_package_dir = Path("A:\\") / company / "rehost"
+            local_package_dir = Path("A:\\") / organization / "rehost"
 
         elif sys.platform == "linux":
-            local_package_dir = Path("/opt") / company / "rehost"
+            local_package_dir = Path("/opt") / organization / "rehost"
 
         elif sys.platform == "darwin":
-            local_package_dir = Path.home() / company / "rehost"
+            local_package_dir = Path.home() / organization / "rehost"
 
         return local_package_dir
 
 
 
     def handle_parse_cfg(self, payload: dict) -> None:
-        print(type(payload))
-        pprint(payload)
         toml_cfg = json.loads(payload.get("cfg"))
 
         self.product_name: str = payload.get("product", "hconvert")
+        self.is_local_backend: bool = payload.get("local_backend", True)
         self.reinstall: bool = payload.get("reinstall", False)
         self.use_local_host: bool = payload.get("use_local_host", False)
         self.local_host: str = payload.get("local_host", "")
-
 
         self.packages_cfg = parse_config_(toml_cfg)
         # try:
@@ -176,15 +196,20 @@ class InstallWorker(mp.Process):
 
         self.send_result(
             WorkerResponse(
-                type="install",
+                type="status",
                 payload={
-                    'type': "cfg",
                     'state': "parsed",
                 }
             )
         )
 
-        self.handle_install_ext_packages()
+
+    def handle_install_1st_stage(self, payload: dict) -> None:
+
+
+        # Install the packages of the 1st stage: mandatory to select
+        #   the correct ones of the 2nd stage
+        print("start 1st stage")
         restart_required = self.handle_install_py_packages_1st_stage()
         if restart_required:
             print("restart to install delayed")
@@ -195,6 +220,8 @@ class InstallWorker(mp.Process):
             return
 
         else:
+            print("start 2nd stage")
+
             restart_required = self.handle_install_2nd_stage()
 
         if restart_required:
@@ -209,9 +236,17 @@ class InstallWorker(mp.Process):
 
 
     def handle_install_ext_packages(self) -> None:
-        # for testing purpose
+
+        # Install the external packages if not local
+        if self.is_local_backend:
+            return
+
+
         if self.use_local_host:
-            g_backend_dirs.local_host = self.local_host if self.local_host else self.get_rehost_dir()
+            g_backend_dirs.local_host = (
+                self.local_host if self.local_host
+                else self.get_rehost_dir()
+            )
 
         # All packages except python
         ext_packages = ExtPackages(self.packages_cfg, sys.platform)
@@ -234,7 +269,7 @@ class InstallWorker(mp.Process):
 
         self.send_result(
             WorkerResponse(
-                type="install",
+                type="status",
                 payload={
                     'type': "external",
                     'state': "installed",
@@ -283,7 +318,7 @@ class InstallWorker(mp.Process):
         print(f"updated in {elapsed:.02f}s")
 
         for pkg in to_install_pkgs:
-            # Cache âckages with size > 80MB
+            # Cache packages with size > 80MB
             if pkg.size > 80000:
                 pkg.do_cache = True
 
