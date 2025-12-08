@@ -1,7 +1,7 @@
+import json
 from typing import Literal
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from typing import Any, Optional
-
 
 
 RequestType = Literal[
@@ -11,17 +11,20 @@ RequestType = Literal[
     'shutdown',
     'telemetry',
 
-    # applications:
-    'setup',
+    # Applications
+    'install',
     'convert',
-    # ...
 ]
 
 
 ResponseType = Literal[
     'pong',
     'identity',
-    'setup',
+    'shutdown',
+
+    # Applications
+    'install',
+    'convert',
 ]
 
 
@@ -32,7 +35,7 @@ EventType = Literal[
 ]
 
 
-SetupTaskId = Literal[
+InstallTaskId = Literal[
     'parse',
     'install',
 ]
@@ -58,6 +61,45 @@ class EventMessage:
     type: EventType
     payload: dict | None = None
 
+
+
+@dataclass(slots=True)
+class WssIdentity:
+    organization: str
+    app: str
+    clients: int
+
+
+@dataclass(slots=True)
+class ParseTask:
+    task_id: InstallTaskId = 'parse'
+    cfg: str = ""
+    local_backend: bool = False
+    reinstall: bool = False
+    use_local_host: bool = False
+    local_host: str = ""
+
+
+@dataclass(slots=True)
+class InstallTask:
+    task_id: InstallTaskId = 'install'
+    stage: int = -1
+
+
+
+
+def serialize(msg: RequestMessage) -> str:
+    return json.dumps(asdict(msg))
+
+
+def deserialize(msg: ResponseMessage | EventMessage) -> dict | None:
+    try:
+        return json.loads(msg)
+
+    except json.JSONDecodeError:
+        pass
+
+    return None
 
 
 

@@ -51,10 +51,10 @@ class BackendServer:
         self.has_ever_connected = False
         self.last_client_disconnect_time = None
 
-        if shutdown_for_inactivity:
-            self.has_ever_connected_timeout = 5
-            self.no_new_client_timeout = 5
-            self.inactive_client_timeout = 5
+        self.shutdown_for_inactivity: bool = shutdown_for_inactivity
+        self.has_ever_connected_timeout = 5
+        self.no_new_client_timeout = 5
+        self.inactive_client_timeout = 5
 
 
 
@@ -139,7 +139,10 @@ class BackendServer:
     async def _monitor_shutdown_task(self):
         slog.info("[S] Starting shutdown monitor")
         while not self._shutting_down:
-            await asyncio.sleep(2)
+            try:
+                await asyncio.wait_for(self.shutdown_event.wait(), timeout=2)
+            except asyncio.TimeoutError:
+                pass
             now = time.time()
             client_count = len(self.clients)
 
@@ -181,7 +184,8 @@ class BackendServer:
     async def run(self):
         """Start the websocket server.
         """
-        asyncio.create_task(self._monitor_shutdown_task())
+        if self.shutdown_for_inactivity:
+            asyncio.create_task(self._monitor_shutdown_task())
         slog.info(f"Starting WebSocket server on {self.host}:{self.port}")
         self._server = await serve(
             self.handle_new_client,
@@ -270,7 +274,7 @@ class BackendServer:
         if pending:
             slog.warning(f"Cancelling {len(pending)} pending tasks...")
             for t in pending:
-                slog.warning(f"  Cancelling tasks {t}")
+                slog.warning(f"  Cancelling task: {t.get_coro().__name__}")
                 t.cancel()
             await asyncio.gather(*pending, return_exceptions=True)
 
@@ -326,6 +330,7 @@ async def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=49990)
+    parser.add_argument("--keep_alive", action="store_true")
     args = parser.parse_args()
 
     slog.info("[S] Server starting")
@@ -336,7 +341,7 @@ async def main():
         host=host,
         port=port,
         shutdown_event=shutdown_event,
-        shutdown_for_inactivity=True,
+        shutdown_for_inactivity=not args.keep_alive,
     )
 
     loop: asyncio.AbstractEventLoop | None = None

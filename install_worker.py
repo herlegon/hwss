@@ -34,12 +34,14 @@ except Exception as e:
     slog.critical(f"Failed to import hinstall package: {str(e)}")
 
 
-InstallWorkerTask = Literal[
-    'shutdown',
-    'packages_cfg'
-]
-worker_task_list = list(InstallWorkerTask.__args__)
 
+from api import (
+    EventMessage,
+    InstallTaskId,
+    ParseTask,
+    InstallTask,
+    ResponseMessage
+)
 
 
 class InstallWorker(mp.Process):
@@ -56,7 +58,7 @@ class InstallWorker(mp.Process):
         self.stop_event: mp.Event = stop_event
         self.daemon = True
 
-        self.product_name: str = "hconvert"
+        self.app: str = "hconvert"
         self.reinstall: bool = False
         self.use_local_host: bool = True
         self.local_host: str = ""
@@ -74,74 +76,45 @@ class InstallWorker(mp.Process):
         while not self.stop_event.is_set():
 
             try:
-                msg: dict = self.task_queue.get(timeout=0.2)
-                task_name: InstallWorkerTask = msg['cmd']
-                payload: dict | None = msg.get('payload', {})
+                data: dict = self.task_queue.get(timeout=0.2)
+                task_id: InstallTaskId = data['task_id']
 
                 # Route to appropriate task handler
-                if task_name == 'shutdown':
+                if task_id == 'shutdown':
                     slog.info(purple(f"[{self.pid}] ℹ️  received shutdown"))
                     break
 
-                elif task_name == 'parse':
-                    self.handle_parse_cfg(payload)
+                elif task_id == 'parse':
+                    task: ParseTask = ParseTask(**data)
+                    self.handle_parse_cfg(task)
 
-                elif task_name == 'install':
-                    stage_no = payload.get('stage', -1)
+                elif task_id == 'install':
+                    install_task: InstallTask = InstallTask(**data)
+                    stage_no = install_task.stage
                     if stage_no == 0:
-                        self.handle_install_ext_packages()
+                        self.handle_install_ext_packages(install_task)
 
                     if stage_no == 1:
-                        self.handle_install_1st_stage(payload)
+                        self.handle_install_1st_stage(install_task)
 
                     elif stage_no == 2:
-                        self.handle_install_2nd_stage(payload)
+                        self.handle_install_2nd_stage(install_task)
 
                     else:
-                        self.send_result(
-                            WorkerResponse(
-                                type="error",
-                                payload=f"Not supported stage no: {stage_no}"
-                            )
-                        )
-
-                    # if 'hinstall' not in sys.modules:
-                    #     try:
-                    #         from hinstall import (
-                    #             ExtPackages,
-                    #             PyPackages,
-                    #             download_install_ext_packages,
-                    #             g_backend_dirs,
-                    #             generate_backend_env,
-                    #             get_python_version,
-                    #             parse_config_,
-                    #             get_pypackage_list,
-                    #             get_pip_versions,
-                    #         )
-                    #     except Exception as e:
-                    #         slog.critical("Failed to import hinstall package")
-
-                    # slog.info(purple(f"[{self.pid}] parse {payload}"))
-
-
-
-                # else:
-                #     self.send_result(
-                #         WorkerResponse(
-                #             type="error",
-                #             payload=f"Unknown task: {task_name}"
-                #         )
-                #     )
+                        self.send({
+                            'result': "error",
+                            'msg': f"Not supported stage no: {stage_no}"
+                        })
 
             except queue.Empty:
                 continue
 
             except Exception as e:
-                print(purple(f"[{self.pid}] ❌ uncaught exception: {str(e)}"))
-                self.send_result(
-                    WorkerResponse(
-                        type="exception",
-                        payload=f"exception: {str(e)}"
+                print(purple(f"[{self.pid}] uncaught exception: {str(e)}"))
+                self.send(
+                    EventMessage(
+                        type='msg',
+                        payload={'exception': str(e)}
                     )
                 )
 
@@ -154,9 +127,15 @@ class InstallWorker(mp.Process):
         return self.stop_event.is_set()
 
 
-    def send_result(self, response: WorkerResponse):
-        """Send result back to server"""
-        self.result_queue.put(response)
+    def send(self, data: EventMessage | dict) -> None:
+        """Send result back to server
+        """
+        if isinstance(data, EventMessage):
+            self.result_queue.put(data)
+        else:
+            self.result_queue.put(
+                ResponseMessage(type='install', payload=data)
+            )
 
 
     def get_rehost_dir(self, organization: str = "herlegon") -> Path:
@@ -175,70 +154,57 @@ class InstallWorker(mp.Process):
 
 
 
-    def handle_parse_cfg(self, payload: dict) -> None:
-        toml_cfg = json.loads(payload.get("cfg"))
+    def handle_parse_cfg(self, task: ParseTask) -> None:
 
-        self.product_name: str = payload.get("product", "hconvert")
-        self.is_local_backend: bool = payload.get("local_backend", True)
-        self.reinstall: bool = payload.get("reinstall", False)
-        self.use_local_host: bool = payload.get("use_local_host", False)
-        self.local_host: str = payload.get("local_host", "")
+        toml_cfg = json.loads(task.cfg)
+
+        self.local_backend: bool = task.local_backend
+        self.reinstall: bool = task.reinstall
+        self.use_local_host: bool = task.use_local_host
+        self.local_host: str = task.local_host
 
         self.packages_cfg = parse_config_(toml_cfg)
-        # try:
-        #     packages_cfg = parse_config_(payload)
-        # except Exception as e:
-        #     exception: str = str(e)
-        #     self.send_result(
-        #         WorkerResponse(type="exception", payload=exception)
-        #     )
-        #     return
 
-        self.send_result(
-            WorkerResponse(
-                type="status",
-                payload={
-                    'state': "parsed",
-                }
-            )
-        )
+        self.send({'status': "parsed"})
 
 
-    def handle_install_1st_stage(self, payload: dict) -> None:
-
-
+    def handle_install_1st_stage(self, task: InstallTask) -> None:
         # Install the packages of the 1st stage: mandatory to select
         #   the correct ones of the 2nd stage
-        print("start 1st stage")
+        # print("start 1st stage")
         restart_required = self.handle_install_py_packages_1st_stage()
-        if restart_required:
-            print("restart to install delayed")
-            print("\nPackages installed successfully. Restarting server...")
+        # if restart_required:
+        #     print("restart to install delayed")
+        #     print("\nPackages installed successfully. Restarting server...")
 
-            # Restart this script
-            os.execv(sys.executable, [sys.executable] + sys.argv)
-            return
+        #     # Restart this script
+        #     os.execv(sys.executable, [sys.executable] + sys.argv)
+        #     return
 
-        else:
-            print("start 2nd stage")
+        # else:
+        #     print("start 2nd stage")
 
-            restart_required = self.handle_install_2nd_stage()
+            # restart_required = self.handle_install_2nd_stage()
 
-        if restart_required:
-            print("restart to install delayed")
-            print("\nPackages installed successfully. Restarting server...")
-            # Restart this script
-            os.execv(sys.executable, [sys.executable] + sys.argv)
-            return
-        else:
-            print(red("READY"))
+        # if restart_required:
+        #     print("restart to install delayed")
+        #     print("\nPackages installed successfully. Restarting server...")
+        #     # Restart this script
+        #     os.execv(sys.executable, [sys.executable] + sys.argv)
+        #     return
+        # else:
+        #     print(red("READY"))
+        self.send({
+            'status': 'installed',
+            'restart': True
+        })
 
 
 
-    def handle_install_ext_packages(self) -> None:
+    def handle_install_ext_packages(self, task: InstallTask) -> None:
 
         # Install the external packages if not local
-        if self.is_local_backend:
+        if self.local_backend:
             return
 
 
@@ -267,7 +233,7 @@ class InstallWorker(mp.Process):
         else:
             print(lightgreen("No packages to install"))
 
-        self.send_result(
+        self.send(
             WorkerResponse(
                 type="status",
                 payload={
@@ -293,6 +259,7 @@ class InstallWorker(mp.Process):
 
 
         initial_pkgs = self.py_packages.get_initial()
+        pprint(initial_pkgs)
 
         to_install_pkgs = initial_pkgs.get_not_installed()
         if self.keep_up_to_date:
@@ -331,7 +298,7 @@ class InstallWorker(mp.Process):
                 else:
                     slog.error(f"{pkg.name} failed to download")
 
-            pkg.install(force=False)
+            pkg.install(reinstall=self.reinstall)
 
         to_install_pkgs.update_installed_versions()
         for pkg in to_install_pkgs:

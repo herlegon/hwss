@@ -8,6 +8,7 @@ from pprint import pprint
 import queue
 import sys
 import websockets
+from api import RequestMessage, ResponseMessage, WssIdentity, deserialize, serialize
 from install_worker import InstallWorker
 from hytils import lightblue, lightcyan, purple, red, yellow
 from websockets import (
@@ -85,71 +86,87 @@ class ClientConnectionHandler:
         Decide whether to forward to a worker or handle as control message.
         Expecting `msg` as a dict with at least a 'type' field.
         """
-        try:
-            msg = json.loads(msg)
-        except json.JSONDecodeError:
+        data = deserialize(msg)
+        if data is None:
             slog.warning(f"⚠️ Received invalid JSON: {msg}")
             return
 
-        request: str = msg.get('type', "")
-        # print(lightblue(f"<<< {cmd}"))
+        try:
+            request = RequestMessage(**data)
+        except Exception as e:
+            slog.warning(f"exception: {str(e)}")
+            return
 
-        if request == 'heartbeat':
-            await self.to_client.put(WorkerResponse(type="pong"))
+        request_type = request.type
+        if request_type == 'heartbeat':
+            await self.to_client.put(ResponseMessage(type='pong'))
 
 
-        elif request == 'identify':
-            client_count = len(self.server.clients) if self.server else 0
-            response = WorkerResponse(
+        elif request_type == 'shutdown':
+            # Allow shutdown only if there is a single client
+            if len(self.server.clients) > 1:
+                await self.to_client.put(
+                    ResponseMessage(type='shutdown', payload="denied")
+                )
+                return
+
+            slog.debug("route shutdown message")
+            if self.server and self.server.shutdown_event:
+                await self.to_client.put(
+                    ResponseMessage(type='shutdown', payload="allowed")
+                )
+                self.server.shutdown_event.set()
+
+            else:
+                slog.warning("No server or shutdown_event reference, force closing client")
+                await self.close()
+
+
+        elif request_type == 'identify':
+            response = ResponseMessage(
                 type='identity',
-                payload={
-                    'organization': "herlegon",
-                    'app': 'setup',
-                    'clients': client_count
-                }
+                payload=WssIdentity(
+                    organization="herlegon",
+                    app="hinstall",
+                    clients=len(self.server.clients) if self.server else 0
+                )
             )
             await self.to_client.put(response)
 
 
-        elif request == "stop":
+        elif request_type == 'restart':
+            os.execv(sys.executable, [sys.executable] + sys.argv)
+            return
+
+
+        elif request_type == 'stop':
             slog.info(f"[{self.client_id}] Received stop command")
             if self.server:
                 # Schedule shutdown on the event loop to avoid blocking current handler
                 asyncio.create_task(self.server.shutdown())
 
 
-        elif request == 'shutdown':
-            slog.debug("route shutdown message")
-            if self.server and self.server.shutdown_event:
-                self.server.shutdown_event.set()
-            else:
-                slog.warning("No server or shutdown_event reference, force closing client")
-                await self.close()
-
-
-        elif request == "restart":
-            os.execv(sys.executable, [sys.executable] + sys.argv)
-            return
-
-
-        # 2. Setup/Install Messages (Only if needed)
-        # You can add logic here to handle "install_packages" command
-        # even if the worker is missing.
-        elif request == 'setup':
+        # Setup/Install Messages
+        elif request_type == 'setup':
+            # Create a worker if not already done
             if self.install_worker_name not in self.workers.keys():
                 self.start_worker(self.install_worker_name)
-            self.submit_task_to_worker(self.install_worker_name, msg)
+
+            # Forward to the worker
+            self.submit_task_to_worker(
+                self.install_worker_name, request.payload
+            )
 
 
-        elif request in worker_task_list:
+        elif request_type in worker_task_list:
             if WORKER_AVAILABLE:
-                self.submit_task_to_worker(self.worker_name, msg)
+                self.submit_task_to_worker(self.worker_name, request.payload)
             else:
                 slog.error("Cannot execute task: System is in Setup Mode.")
 
 
         else:
-            slog.warning(lightblue(f"[{self.client_id}] ⚠️ Unknown message type: {request}"))
+            slog.warning(lightblue(f"[{self.client_id}] ⚠️ Unknown message type: {request_type}"))
 
 
 
@@ -180,18 +197,22 @@ class ClientConnectionHandler:
             slog.info(lightblue(f"[{self.client_id}] ℹ️  Reception task ended"))
 
 
-    async def send_task(self):
+    async def send_message_task(self):
+        """
+        asyncio task used to send messages that are in a queue filled by workers
+        """
         while not self.closing:
             try:
-                event: WsMsg = await asyncio.wait_for(
+                message = await asyncio.wait_for(
                     self.to_client.get(),
                     timeout=0.5
                 )
-                ws_msg: dict = {
-                    "type": event.type,
-                    "payload": event.payload
-                }
-                await self.server_connection.send(json.dumps(ws_msg))
+                msg = (
+                    serialize(message)
+                    if not isinstance(message, str)
+                    else message
+                )
+                await self.server_connection.send(msg)
 
             except asyncio.TimeoutError:
                 # No message in queue, check closing and continue
@@ -211,6 +232,7 @@ class ClientConnectionHandler:
         slog.info(lightblue(f"[{self.client_id}] ℹ️  Send task ended"))
 
 
+
     async def handle(self):
         """
         Start the send/recv loops for this client.
@@ -220,7 +242,7 @@ class ClientConnectionHandler:
 
         # Start websocket loops
         reception_task = asyncio.create_task(self.reception_task())
-        send_task = asyncio.create_task(self.send_task())
+        send_task = asyncio.create_task(self.send_message_task())
 
         self.tasks = [reception_task, send_task]
 
