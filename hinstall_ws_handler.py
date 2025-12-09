@@ -4,7 +4,7 @@ WebSocket logging handler for forwarding hinstall log messages to WebSocket clie
 import logging
 import re
 from typing import Callable, Optional
-from api import EventMessage
+from api import EventMessage, InstallProgress
 
 
 class HInstallWebSocketHandler(logging.Handler):
@@ -108,12 +108,12 @@ class HInstallWebSocketHandler(logging.Handler):
                 if self.current_package:
                     self.send_callback(EventMessage(
                         type='progress',
-                        payload={
-                            'task_id': 'install',
-                            'package_name': self.current_package,
-                            'type': 'progress',
-                            'progress': int(progress)
-                        }
+                        payload=InstallProgress(
+                            task_id='install',
+                            package_name=self.current_package,
+                            type='progress',
+                            progress=int(progress)
+                        )
                     ))
             except ValueError:
                 pass
