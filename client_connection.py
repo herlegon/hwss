@@ -72,6 +72,9 @@ class ClientConnectionHandler:
         self.to_client = asyncio.Queue()
         self.from_client = asyncio.Queue()
 
+        # Store for worker creation
+        self.log_queue = log_queue
+        self.enable_wss_stdout = enable_wss_stdout
 
         # Setup client-specific logger
         self.clog = setup_client_logger(
@@ -377,11 +380,13 @@ class ClientConnectionHandler:
                 worker = InstallWorker(
                     task_queue=task_queue,
                     result_queue=result_queue,
-                    stop_event=self.stop_event
+                    stop_event=self.stop_event,
+                    log_queue=self.log_queue,
+                    enable_stdout=self.enable_wss_stdout
                 )
                 worker.start()
             except Exception as e:
-                self.clog.error(f"[{self.client_id}] ❌  Failed to start worker \'{name}\'")
+                self.clog.error(f"[{self.client_id}] ❌  Failed to start worker '{name}'")
                 return
 
         self.workers[name] = {

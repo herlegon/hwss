@@ -53,6 +53,7 @@ class InstallWorker(mp.Process):
         task_queue: mp.Queue,
         result_queue: mp.Queue,
         stop_event: Event,
+        log_queue: mp.Queue,
         worker_name: str = "install",
         enable_stdout: bool = False,
     ):
@@ -64,13 +65,11 @@ class InstallWorker(mp.Process):
         self.task_queue: mp.Queue = task_queue
         self.result_queue: mp.Queue = result_queue
         self.stop_event: Event = stop_event
+        self.log_queue: mp.Queue = log_queue
+        self.enable_stdout: bool = enable_stdout
 
-        # Setup worker logger
-        self.wlog = setup_worker_logger(
-            self.worker_name,
-            self.result_queue,
-            enable_stdout=enable_stdout
-        )
+        # Logger will be set up in run() after process starts
+        self.wlog = None
 
         self.daemon = True
 
@@ -87,6 +86,13 @@ class InstallWorker(mp.Process):
     def run(self):
         # Ignore KeyboardInterrupt inside the worker
         signal.signal(signal.SIGINT, signal.SIG_IGN)
+
+        # Setup worker logger (must be done inside run(), after process starts)
+        self.wlog = setup_worker_logger(
+            self.worker_name,
+            self.log_queue,
+            enable_stdout=self.enable_stdout
+        )
 
         self.wlog.info(purple(f"[{self.pid}] ℹ️  worker process started"))
 
