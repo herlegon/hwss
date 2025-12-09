@@ -24,11 +24,21 @@ from logger import setup_client_logger
 from typing import TYPE_CHECKING
 
 # Create a module-level property-like access to slog
-# This allows us to use slog.info() directly after logger.slog is initialized
+# This allows us to use slog.info() directly and route to the appropriate logger
+from contextvars import ContextVar
+
+_current_client_logger: ContextVar = ContextVar('current_client_logger', default=None)
+
 class _SlogProxy:
-    """Proxy to access logger.slog dynamically"""
+    """Proxy to access the current client logger or fallback to server logger"""
     def __getattr__(self, name):
+        # Try to get client-specific logger first
+        client_logger = _current_client_logger.get()
+        if client_logger is not None:
+            return getattr(client_logger, name)
+        # Fallback to server logger
         return getattr(logger.slog, name)
+
 slog: logging.Logger = _SlogProxy()
 
 
@@ -89,6 +99,9 @@ class ClientConnectionHandler:
             enable_stdout=enable_wss_stdout
         )
 
+        # Set the context variable so slog.info() routes to this client's logger
+        _current_client_logger.set(self.clog)
+
         # Worker management
         self.workers: dict[str, dict[str, 'Worker']] = {}
         self.stop_event: mp.Event = mp.Event()
@@ -100,12 +113,15 @@ class ClientConnectionHandler:
             self.start_worker(self.worker_name)
 
 
-
     async def route_message(self, msg):
         """
         Decide whether to forward to a worker or handle as control message.
         Expecting `msg` as a dict with at least a 'type' field.
         """
+
+        slog.debug(f"debug: route msg: {msg}")
+        # slog.info(f"info: route msg: {msg}")
+
         data = deserialize(msg)
         if data is None:
             slog.warning(f"⚠️ Received invalid JSON: {msg}")

@@ -79,7 +79,9 @@ class BackendServer:
         handler = ClientConnectionHandler(
             server_connection,
             client_id=client_id,
-            server=self
+            server=self,
+            enable_wss_stdout=self.show_wss_messages,
+            log_file=self.log_file
         )
         self.clients[client_id] = handler
         slog.info(f"Client registerd: {client_id}")

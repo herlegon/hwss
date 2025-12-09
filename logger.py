@@ -181,12 +181,13 @@ def setup_client_logger(
     client_logger.propagate = False  # Don't propagate to parent loggers
 
     # WebSocket handler (sends to this specific client's queue)
+    # Only send INFO and above to client (DEBUG is for server-side debugging only)
     wss_handler = WebSocketHandler(client_queue)
-    wss_handler.setLevel(logging.DEBUG)
+    wss_handler.setLevel(logging.INFO)
     wss_handler.setFormatter(logging.Formatter('%(message)s'))
     client_logger.addHandler(wss_handler)
 
-    # Optional stdout for debugging
+    # Optional stdout for debugging (shows ALL levels including DEBUG)
     if enable_stdout:
         console_handler = logging.StreamHandler(sys.stdout)
         console_handler.setLevel(logging.DEBUG)
