@@ -1,5 +1,6 @@
 from concurrent.futures import ThreadPoolExecutor
 import json
+import logging
 import os
 from pathlib import Path
 from pprint import pprint
@@ -94,6 +95,19 @@ class InstallWorker(mp.Process):
             enable_stdout=self.enable_stdout
         )
 
+        # Setup hinstall logger to forward messages to WebSocket client
+        try:
+            from hinstall.logger import ilog
+            from hinstall_ws_handler import HInstallWebSocketHandler
+            
+            self.hinstall_ws_handler = HInstallWebSocketHandler(self.send)
+            self.hinstall_ws_handler.setLevel(logging.INFO)
+            ilog.addHandler(self.hinstall_ws_handler)
+            self.wlog.debug(f"[{self.pid}] Added WebSocket handler to hinstall logger")
+        except Exception as e:
+            self.wlog.warning(f"[{self.pid}] Failed to setup hinstall WebSocket handler: {e}")
+            self.hinstall_ws_handler = None
+
         self.wlog.info(purple(f"[{self.pid}] ℹ️  worker process started"))
 
         while not self.stop_event.is_set():
@@ -136,6 +150,15 @@ class InstallWorker(mp.Process):
             except Exception as e:
                 self.wlog.error(purple(f"[{self.pid}] uncaught exception: {str(e)}, data={data}"))
                 self.wlog.critical(f"worker: {str(e)}")
+
+        # Cleanup hinstall WebSocket handler
+        if hasattr(self, 'hinstall_ws_handler') and self.hinstall_ws_handler:
+            try:
+                from hinstall.logger import ilog
+                ilog.removeHandler(self.hinstall_ws_handler)
+                self.wlog.debug(f"[{self.pid}] Removed WebSocket handler from hinstall logger")
+            except Exception as e:
+                self.wlog.warning(f"[{self.pid}] Failed to remove hinstall handler: {e}")
 
         self.wlog.info(purple(f"[{self.pid}] ℹ️ terminated"))
 
@@ -278,35 +301,8 @@ class InstallWorker(mp.Process):
             self.wlog.debug(f"All packages installed")
             return False
 
-        # Define progress callback to send updates to client
-        def send_progress(package_name: str, message: str):
-            """Send progress update to client via EventMessage"""
-            from dataclasses import asdict
-            from api import EventMessage, InstallProgress
-            
-            progress_data = InstallProgress(
-                task_id='install',
-                package_name=package_name,
-                type='indet',  # indeterminate progress
-                progress=0
-            )
-            
-            self.send(EventMessage(
-                type='progress',
-                payload=asdict(progress_data)
-            ))
-            # Also log the message
-            self.wlog.info(message)
-
-        # Define message callback to send log messages to client
-        def send_message(msg_type: str, text: str):
-            """Send log message to client via EventMessage"""
-            from api import EventMessage
-            
-            self.send(EventMessage(
-                type='msg',
-                payload={'type': msg_type, 'text': text}
-            ))
+        # Note: All ilog messages are automatically forwarded to WebSocket client
+        # via the HInstallWebSocketHandler added in run()
 
         start_time = time.time()
         with ThreadPoolExecutor(
@@ -317,10 +313,6 @@ class InstallWorker(mp.Process):
         
         for pkg in to_install_pkgs:
             pkg: PyPackage
-            # Attach callbacks to each package
-            pkg.progress_callback = send_progress
-            pkg.message_callback = send_message
-            
             self.wlog.info(f"Installing: {pkg.name} {pkg.version}")
             message: list[str] = "\n".join([
                 f"{lightcyan(pkg.name)}:\n    latest version: {pkg.latest_version}\n    selected: {pkg.version}",
