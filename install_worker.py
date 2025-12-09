@@ -20,7 +20,7 @@ try:
 
 except:
     dev_dir: str = str(Path(__file__).resolve().parent.parent / "hinstall")
-    slog.warning(f"Import hinstall from dev directory: {dev_dir}")
+    # slog.warning(f"Import hinstall from dev directory: {dev_dir}")
     sys.path.append(dev_dir)
 
 try:
@@ -33,7 +33,8 @@ try:
         parse_config_,
     )
 except Exception as e:
-    slog.critical(f"Failed to import hinstall package: {str(e)}")
+    print(red(f"Failed to import hinstall package: {str(e)}"))
+
 
 
 
@@ -99,7 +100,7 @@ class InstallWorker(mp.Process):
         try:
             from hinstall.logger import ilog
             from hinstall_ws_handler import HInstallWebSocketHandler
-            
+
             self.hinstall_ws_handler = HInstallWebSocketHandler(self.send)
             self.hinstall_ws_handler.setLevel(logging.INFO)
             ilog.addHandler(self.hinstall_ws_handler)
@@ -108,7 +109,7 @@ class InstallWorker(mp.Process):
             self.wlog.warning(f"[{self.pid}] Failed to setup hinstall WebSocket handler: {e}")
             self.hinstall_ws_handler = None
 
-        self.wlog.info(purple(f"[{self.pid}] ℹ️  worker process started"))
+        self.wlog.info(purple(f"[{self.pid}] worker process started"))
 
         while not self.stop_event.is_set():
 
@@ -118,7 +119,7 @@ class InstallWorker(mp.Process):
 
                 # Route to appropriate task handler
                 if task_id == 'stop':
-                    self.wlog.info(purple(f"[{self.pid}] ℹ️  received stop command"))
+                    self.wlog.info(purple(f"[{self.pid}] received stop command"))
                     break
 
                 elif task_id == 'parse':
@@ -291,7 +292,7 @@ class InstallWorker(mp.Process):
         cpu_count = max(cpu_count - 1, int(cpu_count * 4 / 5))
 
         initial_pkgs = self.py_packages.get_initial()
-        self.wlog.debug(f"Backend python: {str(g_backend_dirs.python_exe)}")
+        self.wlog.info(f"Backend python: {str(g_backend_dirs.python_exe)}")
 
         to_install_pkgs = initial_pkgs.get_not_installed()
         if self.keep_up_to_date:
@@ -310,7 +311,7 @@ class InstallWorker(mp.Process):
         ) as executor:
             executor.map(lambda pkg: pkg.update_info(), to_install_pkgs)
         elapsed = time.time() - start_time
-        
+
         for pkg in to_install_pkgs:
             pkg: PyPackage
             self.wlog.info(f"Installing: {pkg.name} {pkg.version}")

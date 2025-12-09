@@ -1,7 +1,4 @@
-
-
 import asyncio
-from collections.abc import Callable
 from dataclasses import asdict
 import logging
 import logging.handlers
@@ -12,12 +9,8 @@ from typing import Literal
 from api import EventMessage, MessageType
 import multiprocessing as mp
 
-
-
 # Server logger
 slog: logging.Logger = None
-
-
 
 
 class WebSocketHandler(logging.Handler):
@@ -62,51 +55,69 @@ class WebSocketHandler(logging.Handler):
 # Note: We'll use Python's standard logging.handlers.QueueHandler for workers
 # This is safer and more standard than custom implementation
 
+class StdOutLoggerFormatter(logging.Formatter):
+    LEVEL_PREFIX = {
+        logging.DEBUG: "[D]",
+        5: "[V]",
+        logging.INFO: "[I]",
+        # STATUS_LEVEL: "",
+        logging.WARNING: "[W]",
+        logging.ERROR: "[E]",
+        logging.CRITICAL: "[C]",
+    }
+
+    def format(self, record: logging.LogRecord) -> str:
+        level_no: int = record.levelno
+        prefix: str = self.LEVEL_PREFIX.get(level_no, f"{level_no}")
+        return f"{prefix} {record.getMessage()}"
+
+
 
 def setup_queue_listener(
     log_queue: mp.Queue,
     log_file: str | None = None,
+    mode: Literal['dev', 'prod'] = 'dev',
     enable_stdout: bool = True,
 ) -> logging.handlers.QueueListener:
     """
     Setup a QueueListener that processes log records from all processes.
     This runs in the main process and writes to the log file.
-    
+
     Args:
         log_queue: Multiprocessing queue for log records
         log_file: Path to log file (if None, no file logging)
         enable_stdout: Whether to also print to stdout
-        
+
     Returns:
         QueueListener instance (must be started with .start())
     """
     handlers = []
-    
+
     # File handler (writes to server.log)
     if log_file:
-        file_handler = logging.FileHandler(log_file)
+        file_handler = logging.FileHandler(log_file, encoding='utf-8')
         file_handler.setLevel(logging.DEBUG)
         file_handler.setFormatter(
             logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
         )
         handlers.append(file_handler)
-    
+
     # Console handler (optional)
-    if enable_stdout:
-        console_handler = logging.StreamHandler(sys.stdout)
+    console_handler = logging.StreamHandler(sys.stdout)
+    if mode == 'dev' and enable_stdout:
         console_handler.setLevel(logging.INFO)
-        console_handler.setFormatter(
-            logging.Formatter('%(levelname)s: %(message)s')
-        )
-        handlers.append(console_handler)
-    
+    elif mode == 'prod':
+        console_handler.setLevel(logging.ERROR)
+    console_handler.setFormatter(StdOutLoggerFormatter())
+    handlers.append(console_handler)
+
     # Create and return the listener
     listener = logging.handlers.QueueListener(
         log_queue,
         *handlers,
         respect_handler_level=True
     )
-    
+
     return listener
 
 
@@ -141,12 +152,12 @@ def setup_server_logging(
     queue_handler.setLevel(logging.DEBUG)
     server_logger.addHandler(queue_handler)
 
-    # Optional stdout handler for dev mode (in addition to queue)
-    if mode == 'dev' and enable_stdout:
-        console_handler = logging.StreamHandler(sys.stdout)
-        console_handler.setLevel(logging.INFO)
-        console_handler.setFormatter(logging.Formatter('%(levelname)s: %(message)s'))
-        server_logger.addHandler(console_handler)
+    # # Optional stdout handler for dev mode (in addition to queue)
+    # if mode == 'dev' and enable_stdout:
+    #     console_handler = logging.StreamHandler(sys.stdout)
+    #     console_handler.setLevel(logging.INFO)
+    #     console_handler.setFormatter(logging.Formatter('[server] %(levelname)s: %(message)s'))
+    #     server_logger.addHandler(console_handler)
 
     return server_logger
 

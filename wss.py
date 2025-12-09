@@ -336,7 +336,7 @@ async def main():
     parser.add_argument('--host', default="127.0.0.1")
     parser.add_argument('--port', type=int, default=49990)
     parser.add_argument('--keep-alive', action='store_true')
-    parser.add_argument('--mode', choices=['dev', 'prod'], default='dev')
+    parser.add_argument('--mode', choices=['dev', 'prod'], default='prod')
     parser.add_argument('--log-file', type=str, default=None)
     parser.add_argument('--no-stdout', action='store_true', help='Disable stdout logging (logs to file only)')
     parser.add_argument('--show-wss-messages', action='store_true', help='Print WebSocket messages to stdout (dev only)')
@@ -354,7 +354,8 @@ async def main():
     queue_listener = setup_queue_listener(
         log_queue=log_queue,
         log_file=log_file,
-        enable_stdout=not args.no_stdout
+        enable_stdout=not args.no_stdout,
+        mode=args.mode,
     )
     queue_listener.start()  # Start the listener thread
 
@@ -376,16 +377,14 @@ async def main():
         shutdown_event=shutdown_event,
         shutdown_for_inactivity=not args.keep_alive,
         show_wss_messages=args.show_wss_messages,
-        log_queue=log_queue  # Pass log queue instead of log file
+        log_queue=log_queue,
     )
-
 
     loop: asyncio.AbstractEventLoop | None = None
     if sys.platform == 'linux':
         loop = asyncio.get_event_loop()
 
     setup_signal_handlers(shutdown_event, force_kill_after=5, loop=loop)
-
 
     # Start server in background
     server_task = asyncio.create_task(server.run())
@@ -420,7 +419,7 @@ async def main():
                 slog.info("[S] Server task cancelled due to error")
 
     slog.info("[S] Main exiting")
-    
+
     # Stop the queue listener
     queue_listener.stop()
 
