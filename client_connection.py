@@ -18,7 +18,6 @@ from websockets import (
     ConnectionClosedOK,
     ConnectionClosedError,
 )
-from logger import setup_client_logger, slog
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -54,6 +53,8 @@ class ClientConnectionHandler:
         client_id: unique id for this client
         server: reference to the backend server (optional, for broadcasts, etc.)
         """
+        from logger import setup_client_logger, slog
+
         # Control flags
         self.closing = False
 
