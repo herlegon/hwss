@@ -28,6 +28,7 @@ ResponseType = Literal[
 ]
 
 
+
 EventType = Literal[
     'msg',
     'telemetry',
@@ -55,11 +56,19 @@ class ResponseMessage:
     payload: dict | None = None
 
 
+MessageType = Literal[
+    'critical',
+    'error',
+    'warning',
+    'info',
+    'debug'
+]
 
 @dataclass(slots=True)
 class EventMessage:
     type: EventType
-    payload: dict | None = None
+    payload: dict[MessageType, str]
+
 
 
 
@@ -74,6 +83,7 @@ class WssIdentity:
 class ParseTask:
     task_id: InstallTaskId = 'parse'
     cfg: str = ""
+    cache: bool = True
     local_backend: bool = False
     reinstall: bool = False
     use_local_host: bool = False
@@ -175,11 +185,11 @@ def deserialize(msg: ResponseMessage | EventMessage) -> dict | None:
 
 @dataclass
 class WorkerCommand:
-    cmd: str                 # "parse", "convert", "cancel", "shutdown"
+    cmd: str
     payload: Optional[dict] = None
 
 @dataclass
 class WorkerResponse:
-    type: str                # "progress", "log", "result", "error", "status"
+    type: str
     payload: Any = None
 

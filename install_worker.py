@@ -40,7 +40,8 @@ from api import (
     InstallTaskId,
     ParseTask,
     InstallTask,
-    ResponseMessage
+    ResponseMessage,
+    MessageType,
 )
 
 
@@ -59,6 +60,7 @@ class InstallWorker(mp.Process):
         self.daemon = True
 
         self.app: str = "hconvert"
+        self.cache: bool = True
         self.reinstall: bool = False
         self.use_local_host: bool = True
         self.local_host: str = ""
@@ -111,12 +113,7 @@ class InstallWorker(mp.Process):
 
             except Exception as e:
                 print(purple(f"[{self.pid}] uncaught exception: {str(e)}"))
-                self.send(
-                    EventMessage(
-                        type='msg',
-                        payload={'exception': str(e)}
-                    )
-                )
+                self.send_exception(f"worker: {str(e)}")
 
         slog.info(purple(f"[{self.pid}] ℹ️ terminated"))
 
@@ -138,6 +135,48 @@ class InstallWorker(mp.Process):
             )
 
 
+    def send_msg(self, type: MessageType, text: str) -> None:
+        self.send(
+            EventMessage('msg', payload={'type': type, 'text': text})
+        )
+
+
+    def send_exception(self, text: str) -> None:
+        self.send(
+            EventMessage('msg', payload={'type': 'exception', 'text': text})
+        )
+
+
+    def send_critical(self, text: str) -> None:
+        self.send(
+            EventMessage('msg', payload={'type': 'critical', 'text': text})
+        )
+
+
+    def send_error(self, text: str) -> None:
+        self.send(
+            EventMessage('msg', payload={'type': 'error', 'text': text})
+        )
+
+
+    def send_warning(self, text: str) -> None:
+        self.send(
+            EventMessage('msg', payload={'type': 'warning', 'text': text})
+        )
+
+
+    def send_info(self, text: str) -> None:
+        self.send(
+            EventMessage('msg', payload={'type': 'info', 'text': text})
+        )
+
+
+    def send_debug(self, text: str) -> None:
+        self.send(
+            EventMessage('msg', payload={'type': 'debug', 'text': text})
+        )
+
+
     def get_rehost_dir(self, organization: str = "herlegon") -> Path:
         local_package_dir: Path
 
@@ -155,54 +194,24 @@ class InstallWorker(mp.Process):
 
 
     def handle_parse_cfg(self, task: ParseTask) -> None:
-
         toml_cfg = json.loads(task.cfg)
 
         self.local_backend: bool = task.local_backend
         self.reinstall: bool = task.reinstall
         self.use_local_host: bool = task.use_local_host
         self.local_host: str = task.local_host
+        self.cache = task.cache
 
         self.packages_cfg = parse_config_(toml_cfg)
 
-        self.send({'status': "parsed"})
-
-
-    def handle_install_1st_stage(self, task: InstallTask) -> None:
-        # Install the packages of the 1st stage: mandatory to select
-        #   the correct ones of the 2nd stage
-        # print("start 1st stage")
-        restart_required = self.handle_install_py_packages_1st_stage()
-        # if restart_required:
-        #     print("restart to install delayed")
-        #     print("\nPackages installed successfully. Restarting server...")
-
-        #     # Restart this script
-        #     os.execv(sys.executable, [sys.executable] + sys.argv)
-        #     return
-
-        # else:
-        #     print("start 2nd stage")
-
-            # restart_required = self.handle_install_2nd_stage()
-
-        # if restart_required:
-        #     print("restart to install delayed")
-        #     print("\nPackages installed successfully. Restarting server...")
-        #     # Restart this script
-        #     os.execv(sys.executable, [sys.executable] + sys.argv)
-        #     return
-        # else:
-        #     print(red("READY"))
         self.send({
-            'status': 'installed',
-            'restart': True
+            'task_id': task.task_id,
+            'status': "parsed"
         })
 
 
 
     def handle_install_ext_packages(self, task: InstallTask) -> None:
-
         # Install the external packages if not local
         if self.local_backend:
             return
@@ -233,17 +242,35 @@ class InstallWorker(mp.Process):
         else:
             print(lightgreen("No packages to install"))
 
-        self.send(
-            WorkerResponse(
-                type="status",
-                payload={
-                    'type': "external",
-                    'state': "installed",
-                }
-            )
-        )
+        self.send({
+            'task_id': task.task_id,
+            'stage': task.stage,
+            'status': 'installed',
+            'restart': False
+        })
 
         # Todo: verify
+
+
+    def handle_install_1st_stage(self, task: InstallTask) -> None:
+        # Install the packages of the 1st stage: mandatory to select
+        #   the correct ones of the 2nd stage
+        status = 'failed'
+        restart_required = False
+        try:
+            restart_required = self.handle_install_py_packages_1st_stage()
+            status = 'success'
+
+        except Exception as e:
+            self.send_exception(f"{str(e)}")
+            return
+
+        self.send({
+            'task_id': task.task_id,
+            'stage': task.stage,
+            'status': status,
+            'restart': restart_required
+        })
 
 
 
@@ -259,13 +286,13 @@ class InstallWorker(mp.Process):
 
 
         initial_pkgs = self.py_packages.get_initial()
-        pprint(initial_pkgs)
 
         to_install_pkgs = initial_pkgs.get_not_installed()
         if self.keep_up_to_date:
-            print(f"TODO add packages to update")
+            self.send_info(f"TODO: keep_up_to_date")
 
         if not to_install_pkgs:
+            self.send_info(f"All packages installed")
             return False
 
         start_time = time.time()
@@ -276,17 +303,20 @@ class InstallWorker(mp.Process):
         elapsed = time.time() - start_time
         for pkg in to_install_pkgs:
             pkg: PyPackage
-            print(f"{lightcyan(pkg.name)}:\n    latest version: {pkg.latest_version}\n    selected: {pkg.version}")
-            print(f"    variant: {pkg.variant}")
-            print(f"    installed version: {pkg.installed_version}")
-            print(f"    wheel: {pkg.wheel}")
-            print(f"    wheel url: {pkg.wheel_url}")
-            print(f"    size: {pkg.size // 1024}kB")
-        print(f"updated in {elapsed:.02f}s")
+            message: list[str] = "\n".join([
+                f"{lightcyan(pkg.name)}:\n    latest version: {pkg.latest_version}\n    selected: {pkg.version}",
+                f"    variant: {pkg.variant}",
+                f"    installed version: {pkg.installed_version}",
+                f"    wheel: {pkg.wheel}",
+                f"    wheel url: {pkg.wheel_url}",
+                f"    size: {pkg.size // 1024}kB",
+            ])
+            self.send_info(message)
+        self.send_debug(f"updated package list in {elapsed:.02f}s")
 
         for pkg in to_install_pkgs:
             # Cache packages with size > 80MB
-            if pkg.size > 80000:
+            if pkg.size > 80000 and self.cache:
                 pkg.do_cache = True
 
             if pkg.do_cache:
@@ -298,15 +328,17 @@ class InstallWorker(mp.Process):
                 else:
                     slog.error(f"{pkg.name} failed to download")
 
+            self.send_debug(f"Install {pkg.name} (reinstall={self.reinstall})")
             pkg.install(reinstall=self.reinstall)
 
         to_install_pkgs.update_installed_versions()
         for pkg in to_install_pkgs:
             if not pkg.installed:
-                slog.critical(f"{pkg.name} not installed")
-                pkg.install(recover=True)
+                self.send_error(f"Failed to install {pkg.name}. Retry.")
+                slog.critical(f"Failed to install {pkg.name}.")
+                success = pkg.install(recover=True)
 
-        # Now restart
+        # Restart required
         return True
 
 
