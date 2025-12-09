@@ -33,6 +33,7 @@ EventType = Literal[
     'msg',
     'telemetry',
     'status',
+    'progress',
 ]
 
 
@@ -67,10 +68,11 @@ MessageType = Literal[
 
 
 
+
 @dataclass(slots=True)
 class EventMessage:
     type: EventType
-    payload: dict[MessageType, str]
+    payload: Any
 
 
 @dataclass(slots=True)
@@ -96,6 +98,15 @@ class ParseTask:
 class InstallTask:
     task_id: InstallTaskId = 'install'
     stage: int = -1
+
+
+@dataclass(slots=True)
+class InstallProgress:
+    task_id: InstallTaskId = 'install'
+    package_name: str = ""
+    type: Literal['progress', 'indet'] = 'indet'
+    progress: int = 0
+
 
 
 

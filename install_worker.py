@@ -278,14 +278,50 @@ class InstallWorker(mp.Process):
             self.wlog.debug(f"All packages installed")
             return False
 
+        # Define progress callback to send updates to client
+        def send_progress(package_name: str, message: str):
+            """Send progress update to client via EventMessage"""
+            from dataclasses import asdict
+            from api import EventMessage, InstallProgress
+            
+            progress_data = InstallProgress(
+                task_id='install',
+                package_name=package_name,
+                type='indet',  # indeterminate progress
+                progress=0
+            )
+            
+            self.send(EventMessage(
+                type='progress',
+                payload=asdict(progress_data)
+            ))
+            # Also log the message
+            self.wlog.info(message)
+
+        # Define message callback to send log messages to client
+        def send_message(msg_type: str, text: str):
+            """Send log message to client via EventMessage"""
+            from api import EventMessage
+            
+            self.send(EventMessage(
+                type='msg',
+                payload={'type': msg_type, 'text': text}
+            ))
+
         start_time = time.time()
         with ThreadPoolExecutor(
             max_workers=min(cpu_count, len(to_install_pkgs))
         ) as executor:
             executor.map(lambda pkg: pkg.update_info(), to_install_pkgs)
         elapsed = time.time() - start_time
+        
         for pkg in to_install_pkgs:
             pkg: PyPackage
+            # Attach callbacks to each package
+            pkg.progress_callback = send_progress
+            pkg.message_callback = send_message
+            
+            self.wlog.info(f"Installing: {pkg.name} {pkg.version}")
             message: list[str] = "\n".join([
                 f"{lightcyan(pkg.name)}:\n    latest version: {pkg.latest_version}\n    selected: {pkg.version}",
                 f"    variant: {pkg.variant}",
