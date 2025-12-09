@@ -1,6 +1,7 @@
 import os
 import signal
 import sys
+import logger
 from logger import setup_server_logging, slog
 import logging
 from websockets import (
@@ -245,6 +246,7 @@ class BackendServer:
                 )
             except asyncio.TimeoutError:
                 slog.warning("[S] Timeout while closing client handlers")
+
             self.clients.clear()
             slog.info("[S] All clients disconnected")
 
@@ -340,7 +342,7 @@ async def main():
 
     # Setup server logging (once)
     global slog
-    slog = setup_server_logging(
+    slog = logger.slog = setup_server_logging(
         mode=args.mode,
         log_file=args.log_file,
         enable_stdout=not args.no_stdout,

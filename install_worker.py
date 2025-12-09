@@ -97,8 +97,8 @@ class InstallWorker(mp.Process):
                 task_id: InstallTaskId = data['task_id']
 
                 # Route to appropriate task handler
-                if task_id == 'shutdown':
-                    self.wlog.info(purple(f"[{self.pid}] ℹ️  received shutdown"))
+                if task_id == 'stop':
+                    self.wlog.info(purple(f"[{self.pid}] ℹ️  received stop command"))
                     break
 
                 elif task_id == 'parse':
@@ -127,7 +127,7 @@ class InstallWorker(mp.Process):
                 continue
 
             except Exception as e:
-                self.wlog.error(purple(f"[{self.pid}] uncaught exception: {str(e)}"))
+                self.wlog.error(purple(f"[{self.pid}] uncaught exception: {str(e)}, data={data}"))
                 self.wlog.critical(f"worker: {str(e)}")
 
         self.wlog.info(purple(f"[{self.pid}] ℹ️ terminated"))

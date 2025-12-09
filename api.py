@@ -37,6 +37,7 @@ EventType = Literal[
 
 
 InstallTaskId = Literal[
+    'stop',
     'parse',
     'install',
 ]
