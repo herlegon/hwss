@@ -2,7 +2,7 @@ import os
 import signal
 import sys
 import logger
-from logger import setup_server_logging, slog
+from logger import setup_server_logging, setup_queue_listener, slog
 import logging
 from websockets import (
     ServerConnection,
@@ -38,7 +38,7 @@ class BackendServer:
         shutdown_event: asyncio.Event = None,
         shutdown_for_inactivity: bool = True,
         show_wss_messages: bool = False,
-        log_file: str = "",
+        log_queue: mp.Queue = None,
     ):
         # Server
         self.host = host
@@ -48,7 +48,7 @@ class BackendServer:
 
         # Log
         self.show_wss_messages: bool = show_wss_messages
-        self.log_file: str = log_file
+        self.log_queue: mp.Queue = log_queue
 
         # Shutdown logic tracking
         self.shutdown_event = shutdown_event
@@ -81,7 +81,7 @@ class BackendServer:
             client_id=client_id,
             server=self,
             enable_wss_stdout=self.show_wss_messages,
-            log_file=self.log_file
+            log_queue=self.log_queue
         )
         self.clients[client_id] = handler
         slog.info(f"Client registerd: {client_id}")
@@ -342,11 +342,27 @@ async def main():
     parser.add_argument('--show-wss-messages', action='store_true', help='Print WebSocket messages to stdout (dev only)')
     args = parser.parse_args()
 
-    # Setup server logging (once)
+    # Determine log file path (same for server and all clients in production)
+    log_file = args.log_file
+    if log_file is None and args.mode == 'prod':
+        log_file = 'server.log'  # Default production log file
+    elif log_file is None and not (args.mode == 'dev' and not args.no_stdout):
+        log_file = 'server_dev.log'  # Dev mode with no stdout
+
+    # Create centralized logging queue and listener
+    log_queue = mp.Queue(-1)  # Unlimited size
+    queue_listener = setup_queue_listener(
+        log_queue=log_queue,
+        log_file=log_file,
+        enable_stdout=not args.no_stdout
+    )
+    queue_listener.start()  # Start the listener thread
+
+    # Setup server logging (uses queue)
     global slog
     slog = logger.slog = setup_server_logging(
+        log_queue=log_queue,
         mode=args.mode,
-        log_file=args.log_file,
         enable_stdout=not args.no_stdout,
     )
 
@@ -360,7 +376,7 @@ async def main():
         shutdown_event=shutdown_event,
         shutdown_for_inactivity=not args.keep_alive,
         show_wss_messages=args.show_wss_messages,
-        log_file=args.log_file
+        log_queue=log_queue  # Pass log queue instead of log file
     )
 
 
@@ -404,7 +420,9 @@ async def main():
                 slog.info("[S] Server task cancelled due to error")
 
     slog.info("[S] Main exiting")
-
+    
+    # Stop the queue listener
+    queue_listener.stop()
 
 
 if __name__ == "__main__":

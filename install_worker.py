@@ -103,6 +103,7 @@ class InstallWorker(mp.Process):
 
                 elif task_id == 'parse':
                     task: ParseTask = ParseTask(**data)
+                    self.wlog.debug(f"Parse toml for {task.app_name}")
                     self.handle_parse_cfg(task)
 
                 elif task_id == 'install':

@@ -83,6 +83,7 @@ class WssIdentity:
 @dataclass(slots=True)
 class ParseTask:
     task_id: InstallTaskId = 'parse'
+    app_name: str = ""
     cfg: str = ""
     cache: bool = True
     local_backend: bool = False
