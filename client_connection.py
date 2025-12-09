@@ -18,7 +18,7 @@ from websockets import (
     ConnectionClosedOK,
     ConnectionClosedError,
 )
-from logger import slog
+from logger import setup_client_logger, slog
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -34,8 +34,6 @@ try:
 except ImportError:
     # This happens during the first run (Setup Mode).
     # We define dummy variables so the code below doesn't crash with NameError.
-    slog.warning("Worker dependencies missing. Running in Setup/Maintenance Mode.")
-
     Worker = None
     worker_task_list = []  # An empty list makes "if cmd in list" safe!
     WORKER_AVAILABLE = False
@@ -48,6 +46,8 @@ class ClientConnectionHandler:
         server_connection: ServerConnection,
         client_id: str,
         server: BackendServer,
+        enable_wss_stdout: bool = False,
+        log_file: str | None = None,
     ):
         """
         websocket: the connected websocket object
@@ -69,8 +69,17 @@ class ClientConnectionHandler:
         self.to_client = asyncio.Queue()
         self.from_client = asyncio.Queue()
 
+
+        # Setup client-specific logger
+        self.clog = setup_client_logger(
+            self.client_id,
+            self.to_client,
+            log_file=log_file,
+            enable_stdout=enable_wss_stdout
+        )
+
         # Worker management
-        self.workers: dict[str, dict[str, Worker]] = {}
+        self.workers: dict[str, dict[str, 'Worker']] = {}
         self.stop_event: mp.Event = mp.Event()
 
         self.install_worker_name = "hinstall"

@@ -1,174 +1,249 @@
+
+
+import asyncio
+from collections.abc import Callable
+from dataclasses import asdict
 import logging
-import logging.handlers
+import queue
+import sys
+from typing import Literal
+
+from api import EventMessage, MessageType
 import multiprocessing as mp
-from typing import Optional
 
 
-# Define custom log levels for client messages
-# These levels are higher than standard levels to ensure they're always processed
-CLIENT_CRITICAL = logging.CRITICAL + 1
-CLIENT_ERROR = logging.ERROR + 1
-CLIENT_WARNING = logging.WARNING + 1
-CLIENT_INFO = logging.INFO + 1
-CLIENT_DEBUG = logging.DEBUG + 1
 
-# Register custom level names
-logging.addLevelName(CLIENT_CRITICAL, 'CLIENT_CRITICAL')
-logging.addLevelName(CLIENT_ERROR, 'CLIENT_ERROR')
-logging.addLevelName(CLIENT_WARNING, 'CLIENT_WARNING')
-logging.addLevelName(CLIENT_INFO, 'CLIENT_INFO')
+# Server logger
+slog: logging.Logger = None
 
 
-class AbbreviatedLevelFilter(logging.Filter):
-    """Filter to abbreviate log level names for cleaner output"""
-    level_map = {
-        logging.DEBUG: '[V]',
-        logging.INFO: '[I]',
-        logging.WARNING: '[W]',
-        logging.ERROR: '[E]',
-        logging.CRITICAL: '[C]',
-        CLIENT_INFO: '[CI]',
-        CLIENT_WARNING: '[CW]',
-        CLIENT_ERROR: '[CE]',
-        CLIENT_CRITICAL: '[CC]',
-    }
-
-    def filter(self, record):
-        record.levelname = self.level_map.get(record.levelno, record.levelname)
-        return True
 
 
-class ClientQueueHandler(logging.Handler):
-    """Handler that sends client-level messages to a multiprocessing queue"""
+class WebSocketHandler(logging.Handler):
+    """Handler that sends log messages as WebSocket EventMessages to a specific client"""
 
-    def __init__(self, result_queue: Optional[mp.Queue] = None):
+    def __init__(self, client_queue: asyncio.Queue):
+        """
+        Args:
+            client_queue: The to_client queue for a specific ClientConnectionHandler
+        """
         super().__init__()
-        self.result_queue = result_queue
-
-    def set_queue(self, result_queue: mp.Queue):
-        """Set or update the result queue"""
-        self.result_queue = result_queue
+        self.client_queue = client_queue
 
     def emit(self, record: logging.LogRecord):
-        """Send client messages to the queue"""
-        if self.result_queue is None:
-            return
-
-        # Only handle CLIENT_* levels
-        if record.levelno not in (
-            CLIENT_INFO, CLIENT_WARNING, CLIENT_ERROR, CLIENT_CRITICAL
-        ):
-            return
-
         try:
-            # Map custom levels to message types
-            level_to_type = {
-                CLIENT_DEBUG: 'debug',
-                CLIENT_INFO: 'info',
-                CLIENT_WARNING: 'warning',
-                CLIENT_ERROR: 'error',
-                CLIENT_CRITICAL: 'critical',
-            }
-
-            msg_type = level_to_type.get(record.levelno, 'info')
-
-            # Import here to avoid circular dependency
-            from api import EventMessage
-
-            message = EventMessage(
-                'msg',
-                payload={'type': msg_type, 'text': record.getMessage()}
+            msg_type = self._levelname_to_message_type(record.levelname)
+            event_msg = EventMessage(
+                type='msg',
+                payload={'type': msg_type, 'text': self.format(record)}
             )
-
-            self.result_queue.put(message)
-
+            # Put message in the client's queue (non-blocking)
+            try:
+                self.client_queue.put_nowait(event_msg)
+            except asyncio.QueueFull:
+                # Queue is full, skip this message
+                pass
         except Exception:
-            # Silently fail to avoid breaking the logging system
-            pass
+            self.handleError(record)
+
+    @staticmethod
+    def _levelname_to_message_type(levelname: str) -> MessageType:
+        mapping: dict[str, MessageType] = {
+            'CRITICAL': 'critical',
+            'ERROR': 'error',
+            'WARNING': 'warning',
+            'INFO': 'info',
+            'DEBUG': 'debug',
+        }
+        return mapping.get(levelname, 'info')
 
 
-class CustomLogger(logging.Logger):
-    """Extended logger with client-specific methods"""
 
-    def client_debug(self, msg, *args, **kwargs):
-        """Log info message to both client and stdout"""
-        if self.isEnabledFor(CLIENT_DEBUG):
-            self._log(CLIENT_DEBUG, msg, args, **kwargs)
+class MultiprocessingHandler(logging.Handler):
+    """Handler that sends log messages from worker processes via mp.Queue"""
 
+    def __init__(self, mp_queue: mp.Queue):
+        super().__init__()
+        self.mp_queue = mp_queue
 
-    def client_info(self, msg, *args, **kwargs):
-        """Log info message to both client and stdout"""
-        if self.isEnabledFor(CLIENT_INFO):
-            self._log(CLIENT_INFO, msg, args, **kwargs)
+    def emit(self, record: logging.LogRecord):
+        try:
+            msg_type = self._levelname_to_message_type(record.levelname)
+            event_msg = EventMessage(
+                type='msg',
+                payload={'type': msg_type, 'text': self.format(record)}
+            )
+            # Send to main process via multiprocessing queue
+            try:
+                self.mp_queue.put_nowait(asdict(event_msg))
+            except queue.Full:
+                # Queue is full, skip this message
+                pass
+        except Exception:
+            self.handleError(record)
 
-
-    def client_warning(self, msg, *args, **kwargs):
-        """Log warning message to both client and stdout"""
-        if self.isEnabledFor(CLIENT_WARNING):
-            self._log(CLIENT_WARNING, msg, args, **kwargs)
-
-
-    def client_error(self, msg, *args, **kwargs):
-        """Log error message to both client and stdout"""
-        if self.isEnabledFor(CLIENT_ERROR):
-            self._log(CLIENT_ERROR, msg, args, **kwargs)
-
-
-    def client_critical(self, msg, *args, **kwargs):
-        """Log critical message to both client and stdout"""
-        if self.isEnabledFor(CLIENT_CRITICAL):
-            self._log(CLIENT_CRITICAL, msg, args, **kwargs)
-
-
-# Set custom logger class
-logging.setLoggerClass(CustomLogger)
-
-# Create and configure the main logger
-slog: CustomLogger = logging.getLogger('hwss')
-slog.setLevel(logging.DEBUG)
-
-# Remove any existing handlers
-slog.handlers.clear()
-
-# Custom formatter that includes process name for worker processes
-class WorkerAwareFormatter(logging.Formatter):
-    """Formatter that includes process name for non-MainProcess logs"""
-    def format(self, record):
-        # Include process name if not from MainProcess
-        if record.processName != "MainProcess":
-            # Format: [LEVEL] [ProcessName] message
-            return f"{record.levelname} [{record.processName}] {record.getMessage()}"
-        else:
-            # Format: [LEVEL] message
-            return f"{record.levelname} {record.getMessage()}"
-
-# Create console handler with formatter
-console_handler = logging.StreamHandler()
-console_handler.setLevel(logging.DEBUG)
-console_handler.setFormatter(WorkerAwareFormatter())
-console_handler.addFilter(AbbreviatedLevelFilter())
-slog.addHandler(console_handler)
-
-# Create client queue handler (queue will be set later)
-client_queue_handler = ClientQueueHandler()
-client_queue_handler.setLevel(CLIENT_INFO)
-slog.addHandler(client_queue_handler)
-
-# Prevent propagation to root logger
-slog.propagate = False
+    @staticmethod
+    def _levelname_to_message_type(levelname: str) -> MessageType:
+        mapping: dict[str, MessageType] = {
+            'CRITICAL': 'critical',
+            'ERROR': 'error',
+            'WARNING': 'warning',
+            'INFO': 'info',
+            'DEBUG': 'debug',
+        }
+        return mapping.get(levelname, 'info')
 
 
-def set_debug_mode(enabled: bool):
-    """Enable or disable debug output to stdout"""
-    if enabled:
-        console_handler.setLevel(logging.DEBUG)
-        slog.debug("Debug mode enabled")
-    else:
+
+
+
+def setup_server_logging(
+    mode: Literal['dev', 'prod'] = 'dev',
+    log_file: str | None = None,
+    enable_stdout: bool = True,
+) -> logging.Logger:
+    """
+    Setup logging for server events (startup, shutdown, connections).
+    Called once at server startup.
+
+    Args:
+        mode: 'dev' or 'prod'
+        log_file: Path to log file
+        enable_stdout: Whether to print to stdout
+
+    Returns:
+        Server logger instance
+    """
+
+    # Determine log file path
+    if log_file is None:
+        if mode == 'prod':
+            log_file = 'server.log'
+        elif not enable_stdout:
+            log_file = 'server_dev.log'
+
+    # Create formatters
+    detailed_formatter = logging.Formatter(
+        '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    )
+    simple_formatter = logging.Formatter('%(levelname)s: %(message)s')
+
+    # ===== SERVER LOGGER =====
+    server_logger = logging.getLogger('server')
+    server_logger.setLevel(logging.DEBUG)
+    server_logger.handlers.clear()
+    server_logger.propagate = False  # Don't propagate to root logger
+
+    # File handler for server logs (if specified)
+    if log_file:
+        file_handler = logging.FileHandler(log_file)
+        file_handler.setLevel(logging.DEBUG)
+        file_handler.setFormatter(detailed_formatter)
+        server_logger.addHandler(file_handler)
+
+    # Stdout handler for server logs (dev mode)
+    if mode == 'dev' and enable_stdout:
+        console_handler = logging.StreamHandler(sys.stdout)
         console_handler.setLevel(logging.INFO)
+        console_handler.setFormatter(simple_formatter)
+        server_logger.addHandler(console_handler)
+
+    return server_logger
 
 
-def set_client_queue(result_queue: mp.Queue):
-    """Set the queue for sending messages to the client"""
-    client_queue_handler.set_queue(result_queue)
 
 
+def setup_client_logger(
+    client_id: str,
+    client_queue: asyncio.Queue,
+    log_file: str | None = None,
+    enable_stdout: bool = False,
+) -> logging.Logger:
+    """
+    Setup a client-specific logger that sends messages to that client's queue.
+    Called once per client connection.
+
+    Args:
+        client_id: Unique client identifier
+        client_queue: The to_client asyncio.Queue for this specific client
+        log_file: Optional log file path
+        enable_stdout: Whether to also print to stdout (for debugging)
+
+    Returns:
+        Client-specific logger instance
+    """
+
+    # Create a unique logger for this client
+    logger_name = f'wss.client.{client_id}'
+    client_logger = logging.getLogger(logger_name)
+    client_logger.setLevel(logging.DEBUG)
+    client_logger.handlers.clear()
+    client_logger.propagate = False  # Don't propagate to parent loggers
+
+    # WebSocket handler (sends to this specific client's queue)
+    wss_handler = WebSocketHandler(client_queue)
+    wss_handler.setLevel(logging.DEBUG)
+    wss_handler.setFormatter(logging.Formatter('%(message)s'))
+    client_logger.addHandler(wss_handler)
+
+    # Optional stdout for debugging
+    if enable_stdout:
+        console_handler = logging.StreamHandler(sys.stdout)
+        console_handler.setLevel(logging.DEBUG)
+        console_handler.setFormatter(
+            logging.Formatter(f'[WSS-{client_id[:7]}] %(levelname)s: %(message)s')
+        )
+        client_logger.addHandler(console_handler)
+
+    # Optional file handler
+    if log_file:
+        file_handler = logging.FileHandler(log_file)
+        file_handler.setLevel(logging.DEBUG)
+        file_handler.setFormatter(
+            logging.Formatter(f'%(asctime)s - {logger_name} - %(levelname)s - %(message)s')
+        )
+        client_logger.addHandler(file_handler)
+
+    return client_logger
+
+
+def setup_worker_logger(
+    worker_name: str,
+    mp_queue: mp.Queue,
+    enable_stdout: bool = False,
+) -> logging.Logger:
+    """
+    Setup logging for a worker process.
+    Called inside each worker process after it starts.
+
+    Args:
+        worker_name: Name of the worker
+        mp_queue: Multiprocessing queue to send messages back to main process
+        enable_stdout: Whether to also print to stdout
+
+    Returns:
+        Worker logger instance
+    """
+
+    logger_name = f'worker.{worker_name}'
+    worker_logger = logging.getLogger(logger_name)
+    worker_logger.setLevel(logging.DEBUG)
+    worker_logger.handlers.clear()
+    worker_logger.propagate = False
+
+    # Multiprocessing handler (sends messages via mp.Queue)
+    mp_handler = MultiprocessingHandler(mp_queue)
+    mp_handler.setLevel(logging.DEBUG)
+    mp_handler.setFormatter(logging.Formatter('%(message)s'))
+    worker_logger.addHandler(mp_handler)
+
+    # Optional stdout for debugging
+    if enable_stdout:
+        console_handler = logging.StreamHandler(sys.stdout)
+        console_handler.setLevel(logging.DEBUG)
+        console_handler.setFormatter(
+            logging.Formatter(f'[WORKER-{worker_name}] %(levelname)s: %(message)s')
+        )
+        worker_logger.addHandler(console_handler)
+
+    return worker_logger

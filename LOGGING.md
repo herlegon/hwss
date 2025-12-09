@@ -6,13 +6,16 @@ The logging system has been refactored to use `slog` (structured logging) with c
 
 ## Custom Log Levels
 
-### Client Levels (sent to client + stdout)
+### Client Levels (always sent to websocket client)
 - `CLIENT_CRITICAL` (51) - Critical errors sent to client
 - `CLIENT_ERROR` (41) - Errors sent to client  
 - `CLIENT_WARNING` (31) - Warnings sent to client
 - `CLIENT_INFO` (21) - Info messages sent to client
+- `CLIENT_DEBUG` (11) - Debug messages sent to client
 
-### Standard Levels (stdout only)
+**Note**: CLIENT_* messages are **always** forwarded to the websocket client, but are **only printed to console when debug mode is enabled** (via `--debug` flag).
+
+### Standard Levels (stdout only, never sent to client)
 - `CRITICAL` (50) - Critical errors (stdout only)
 - `ERROR` (40) - Errors (stdout only)
 - `WARNING` (30) - Warnings (stdout only)
@@ -29,14 +32,16 @@ from logger import slog, set_client_queue
 # In the worker's run() method, set up the client queue
 set_client_queue(self.result_queue)
 
-# Messages sent to client AND stdout
+# Messages sent to websocket client (always)
+# Only shown in console when debug mode is enabled
+slog.client_debug("Detailed debug information for client")
 slog.client_info("All packages installed")
 slog.client_warning("Package version mismatch")
 slog.client_error("Failed to install package")
 slog.client_critical("Critical installation failure")
 
-# Messages sent to stdout only
-slog.debug("Detailed debug information")  # Only shown with --debug
+# Messages sent to stdout only (never sent to client)
+slog.debug("Internal debug information")  # Only shown with --debug
 slog.info("General information")
 slog.warning("Warning message")
 slog.error("Error message")
@@ -91,6 +96,7 @@ Log output uses abbreviated level names for cleaner display:
 - `[W]` - WARNING
 - `[E]` - ERROR
 - `[C]` - CRITICAL
+- `[CD]` - CLIENT_DEBUG
 - `[CI]` - CLIENT_INFO
 - `[CW]` - CLIENT_WARNING
 - `[CE]` - CLIENT_ERROR

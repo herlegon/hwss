@@ -1,6 +1,7 @@
 import os
 import signal
 import sys
+from logger import setup_server_logging, slog
 import logging
 from websockets import (
     ServerConnection,
@@ -19,15 +20,14 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__))))
 
 from client_connection import ClientConnectionHandler
 from hytils import red, yellow
-from logger import slog
 import multiprocessing as mp
 import uuid
-
+import time
 
 # logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(message)s")
 
 
-import time
+
 
 class BackendServer:
     def __init__(
@@ -36,26 +36,33 @@ class BackendServer:
         port=49990,
         shutdown_event: asyncio.Event = None,
         shutdown_for_inactivity: bool = True,
+        show_wss_messages: bool = False,
+        log_file: str = "",
     ):
-        self.shutdown_event = shutdown_event
+        # Server
         self.host = host
         self.port = port
         self._server: Server = None
-        self._shutdown_future: asyncio.Future = None
-        self._shutting_down: bool = False
         self.clients: dict[str, ClientConnectionHandler] = {}
 
+        # Log
+        self.show_wss_messages: bool = show_wss_messages
+        self.log_file: str = log_file
+
         # Shutdown logic tracking
+        self.shutdown_event = shutdown_event
+        self._shutdown_future: asyncio.Future = None
+        self._shutting_down: bool = False
         self.start_time = time.time()
         self.last_activity_time = time.time()
         self.has_ever_connected = False
         self.last_client_disconnect_time = None
 
+        # Monitor inactivity to properly shutdown
         self.shutdown_for_inactivity: bool = shutdown_for_inactivity
         self.has_ever_connected_timeout = 5
         self.no_new_client_timeout = 5
         self.inactive_client_timeout = 5
-
 
 
     def register_client(self, server_connection: ServerConnection) -> str | None:
@@ -193,13 +200,7 @@ class BackendServer:
             self.port,
         )
         slog.info(f"Server listening on {self.host}:{self.port}")
-        print("READY")
-
-        #     # Wait indefinitely until shutdown is requested, but cancel is mandatory
-        #     try:
-        #         await asyncio.Future()
-        #     finally:
-        #         slog.info("[S] Server run loop ended")
+        print("READY", file=sys.stdout, flush=True)
 
         # Create a future that can be set to stop the server
         self._shutdown_future = asyncio.Future()
@@ -328,15 +329,22 @@ def setup_signal_handlers(
 async def main():
     import argparse
     parser = argparse.ArgumentParser()
-    parser.add_argument("--host", default="127.0.0.1")
-    parser.add_argument("--port", type=int, default=49990)
-    parser.add_argument("--keep_alive", action="store_true")
-    parser.add_argument("--debug", action="store_true", help="Enable debug output")
+    parser.add_argument('--host', default="127.0.0.1")
+    parser.add_argument('--port', type=int, default=49990)
+    parser.add_argument('--keep-alive', action='store_true')
+    parser.add_argument('--mode', choices=['dev', 'prod'], default='dev')
+    parser.add_argument('--log-file', type=str, default=None)
+    parser.add_argument('--no-stdout', action='store_true', help='Disable stdout logging (logs to file only)')
+    parser.add_argument('--show-wss-messages', action='store_true', help='Print WebSocket messages to stdout (dev only)')
     args = parser.parse_args()
 
-    # Configure debug mode
-    from logger import set_debug_mode
-    set_debug_mode(args.debug)
+    # Setup server logging (once)
+    global slog
+    slog = setup_server_logging(
+        mode=args.mode,
+        log_file=args.log_file,
+        enable_stdout=not args.no_stdout,
+    )
 
     slog.info("[S] Server starting")
     host, port = args.host, args.port
@@ -347,7 +355,10 @@ async def main():
         port=port,
         shutdown_event=shutdown_event,
         shutdown_for_inactivity=not args.keep_alive,
+        show_wss_messages=args.show_wss_messages,
+        log_file=args.log_file
     )
+
 
     loop: asyncio.AbstractEventLoop | None = None
     if sys.platform == 'linux':

@@ -64,12 +64,12 @@ MessageType = Literal[
     'debug'
 ]
 
+
+
 @dataclass(slots=True)
 class EventMessage:
     type: EventType
     payload: dict[MessageType, str]
-
-
 
 
 @dataclass(slots=True)
@@ -97,9 +97,16 @@ class InstallTask:
 
 
 
-
 def serialize(msg: RequestMessage) -> str:
-    return json.dumps(asdict(msg))
+    """Serialize object to JSON string"""
+    if hasattr(msg, '__dataclass_fields__'):
+        return json.dumps(asdict(msg))
+
+    elif hasattr(msg, '__dict__'):
+        return json.dumps(vars(msg))
+
+    return json.dumps(msg)
+
 
 
 def deserialize(msg: ResponseMessage | EventMessage) -> dict | None:

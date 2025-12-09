@@ -8,9 +8,10 @@ import signal
 import sys
 import time
 from hytils import lightcyan, lightgreen, purple, red, yellow
-from logger import slog, set_client_queue
+from logger import setup_worker_logger, slog
 from api import WorkerResponse
 import multiprocessing as mp
+from multiprocessing.synchronize import Event
 from typing import Literal
 
 try:
@@ -51,15 +52,26 @@ class InstallWorker(mp.Process):
         self,
         task_queue: mp.Queue,
         result_queue: mp.Queue,
-        stop_event: mp.Event
+        stop_event: Event,
+        worker_name: str = "install",
+        enable_stdout: bool = False,
     ):
         super().__init__(
-            name="install"
+            name=worker_name
         )
+        self.worker_name: str = worker_name
 
         self.task_queue: mp.Queue = task_queue
         self.result_queue: mp.Queue = result_queue
-        self.stop_event: mp.Event = stop_event
+        self.stop_event: Event = stop_event
+
+        # Setup worker logger
+        self.wlog = setup_worker_logger(
+            self.worker_name,
+            self.result_queue,
+            enable_stdout=enable_stdout
+        )
+
         self.daemon = True
 
         self.app: str = "hconvert"
@@ -68,7 +80,6 @@ class InstallWorker(mp.Process):
         self.use_local_host: bool = True
         self.local_host: str = ""
         self.keep_up_to_date: bool = False
-
         self.packages_cfg : dict[str, str] = {}
         self.py_packages: PyPackages = None
 
@@ -77,10 +88,7 @@ class InstallWorker(mp.Process):
         # Ignore KeyboardInterrupt inside the worker
         signal.signal(signal.SIGINT, signal.SIG_IGN)
 
-        # Set up the client queue handler for this worker process
-        set_client_queue(self.result_queue)
-
-        slog.info(purple(f"[{self.pid}] ℹ️  worker process started"))
+        self.wlog.info(purple(f"[{self.pid}] ℹ️  worker process started"))
 
         while not self.stop_event.is_set():
 
@@ -90,7 +98,7 @@ class InstallWorker(mp.Process):
 
                 # Route to appropriate task handler
                 if task_id == 'shutdown':
-                    slog.info(purple(f"[{self.pid}] ℹ️  received shutdown"))
+                    self.wlog.info(purple(f"[{self.pid}] ℹ️  received shutdown"))
                     break
 
                 elif task_id == 'parse':
@@ -119,10 +127,10 @@ class InstallWorker(mp.Process):
                 continue
 
             except Exception as e:
-                slog.error(purple(f"[{self.pid}] uncaught exception: {str(e)}"))
-                slog.client_critical(f"worker: {str(e)}")
+                self.wlog.error(purple(f"[{self.pid}] uncaught exception: {str(e)}"))
+                self.wlog.critical(f"worker: {str(e)}")
 
-        slog.info(purple(f"[{self.pid}] ℹ️ terminated"))
+        self.wlog.info(purple(f"[{self.pid}] ℹ️ terminated"))
 
 
 
@@ -204,11 +212,11 @@ class InstallWorker(mp.Process):
                 use_local_host=self.use_local_host
             )
             if installed:
-                slog.client_info(lightgreen("All packages installed"))
+                self.wlog.info(lightgreen("All packages installed"))
             else:
-                slog.client_error(red("Error: missing package(s)"))
+                self.wlog.error(red("Error: missing package(s)"))
         else:
-            slog.client_info(lightgreen("No packages to install"))
+            self.wlog.error(lightgreen("No packages to install"))
 
         self.send({
             'task_id': task.task_id,
@@ -230,7 +238,7 @@ class InstallWorker(mp.Process):
             status = 'installed'
 
         except Exception as e:
-            slog.client_critical(f"Exception: {str(e)}")
+            self.wlog.critical(f"Exception: {str(e)}")
             return
 
         self.send({
@@ -253,15 +261,14 @@ class InstallWorker(mp.Process):
         cpu_count = max(cpu_count - 1, int(cpu_count * 4 / 5))
 
         initial_pkgs = self.py_packages.get_initial()
-        slog.client_debug(f"Backend python: {str(g_backend_dirs.python_exe)}")
-
+        self.wlog.debug(f"Backend python: {str(g_backend_dirs.python_exe)}")
 
         to_install_pkgs = initial_pkgs.get_not_installed()
         if self.keep_up_to_date:
-            slog.client_debug(f"TODO: keep_up_to_date")
+            self.wlog.debug(f"TODO: keep_up_to_date")
 
         if not to_install_pkgs:
-            slog.client_debug(f"All packages installed")
+            self.wlog.debug(f"All packages installed")
             return False
 
         start_time = time.time()
@@ -280,8 +287,8 @@ class InstallWorker(mp.Process):
                 f"    wheel url: {pkg.wheel_url}",
                 f"    size: {pkg.size // 1024}kB",
             ])
-            slog.client_debug(message)
-        slog.debug(f"updated package list in {elapsed:.02f}s")
+            self.wlog.debug(message)
+        self.wlog.debug(f"updated package list in {elapsed:.02f}s")
 
         for pkg in to_install_pkgs:
             # Cache packages with size > 80MB
@@ -293,17 +300,17 @@ class InstallWorker(mp.Process):
                 downloaded = pkg.download_wheel(force=False, use_pip=False)
                 elapsed = time.time() - start_time
                 if downloaded:
-                    slog.info(f"{pkg.name} downloaded in {elapsed:.02f}s")
+                    self.wlog.info(f"{pkg.name} downloaded in {elapsed:.02f}s")
                 else:
-                    slog.error(f"{pkg.name} failed to download")
+                    self.wlog.error(f"{pkg.name} failed to download")
 
-            slog.debug(f"Install {pkg.name} (reinstall={self.reinstall})")
+            self.wlog.debug(f"Install {pkg.name} (reinstall={self.reinstall})")
             pkg.install(reinstall=self.reinstall)
 
         to_install_pkgs.update_installed_versions()
         for pkg in to_install_pkgs:
             if not pkg.installed:
-                slog.client_error(f"Failed to install {pkg.name}. Retry.")
+                self.wlog.client_error(f"Failed to install {pkg.name}. Retry.")
                 success = pkg.install(recover=True)
 
         # Restart required
@@ -328,10 +335,10 @@ class InstallWorker(mp.Process):
         directml = is_feature_supported('directml')
         rocm = is_feature_supported('rocm')
 
-        slog.debug(f"CUDA: {'✅' if cuda else '❌'}")
-        slog.debug(f"TensorRT: {'✅' if tensorrt else '❌'}")
-        slog.debug(f"direct ML: {'✅' if directml else '❌'}")
-        slog.debug(f"RocM: {'✅' if rocm else '❌'}")
+        self.wlog.debug(f"CUDA: {'✅' if cuda else '❌'}")
+        self.wlog.debug(f"TensorRT: {'✅' if tensorrt else '❌'}")
+        self.wlog.debug(f"direct ML: {'✅' if directml else '❌'}")
+        self.wlog.debug(f"RocM: {'✅' if rocm else '❌'}")
 
         start_time = time.time()
 
@@ -353,11 +360,11 @@ class InstallWorker(mp.Process):
             pkg.supported = cpu_fallback
 
 
-        slog.debug("supported packages")
+        self.wlog.debug("supported packages")
         supported_pkgs = pkgs.get_delayed(supported_only=True)
         for pkg in supported_pkgs:
-            slog.debug(lightcyan(pkg.pretty_name))
-            slog.debug(f"Package details: {pkg}")
+            self.wlog.debug(lightcyan(pkg.pretty_name))
+            self.wlog.debug(f"Package details: {pkg}")
 
         cpu_count = mp.cpu_count()
         cpu_count = max(cpu_count - 1, int(cpu_count * 4 / 5))
@@ -369,14 +376,14 @@ class InstallWorker(mp.Process):
 
         for pkg in supported_pkgs:
             pkg: PyPackage
-            slog.debug(f"{lightcyan(pkg.name)}:\n    latest version: {pkg.latest_version}\n    selected: {pkg.version}")
-            slog.debug(f"    installed: {pkg.installed}")
-            slog.debug(f"    variant: {pkg.variant}")
-            slog.debug(f"    wheel: {pkg.wheel}")
-            slog.debug(f"    wheel url: {pkg.wheel_url}")
-            slog.debug(f"    size: {pkg.size // 1024}kB")
-            slog.debug(f"    do cache: {pkg.do_cache}")
-        slog.info(f"updated in {elapsed:.02f}s")
+            self.wlog.debug(f"{lightcyan(pkg.name)}:\n    latest version: {pkg.latest_version}\n    selected: {pkg.version}")
+            self.wlog.debug(f"    installed: {pkg.installed}")
+            self.wlog.debug(f"    variant: {pkg.variant}")
+            self.wlog.debug(f"    wheel: {pkg.wheel}")
+            self.wlog.debug(f"    wheel url: {pkg.wheel_url}")
+            self.wlog.debug(f"    size: {pkg.size // 1024}kB")
+            self.wlog.debug(f"    do cache: {pkg.do_cache}")
+        self.wlog.info(f"updated in {elapsed:.02f}s")
 
 
         # print("Packages to install: ", lightcyan(", ".join((pkg.name for pkg in to_install_pkgs))))
@@ -392,12 +399,12 @@ class InstallWorker(mp.Process):
             start_time = time.time()
             downloaded = pkg.download_wheel(force=False, use_pip=False)
             if downloaded:
-                slog.info(f"{pkg.name} downloaded in {elapsed:.02f}s")
+                self.wlog.info(f"{pkg.name} downloaded in {elapsed:.02f}s")
             else:
-                slog.error(f"{pkg.name} failed to download")
+                self.wlog.error(f"{pkg.name} failed to download")
 
             elapsed = time.time() - start_time
-            slog.info(f"{pkg.name} downloaded in {elapsed:.02f}s")
+            self.wlog.info(f"{pkg.name} downloaded in {elapsed:.02f}s")
             # print(lightcyan("-" * 80))
 
         # install
@@ -408,6 +415,6 @@ class InstallWorker(mp.Process):
         pkgs.update_installed_versions()
         for pkg in supported_pkgs:
             if not pkg.installed:
-                slog.critical(f"{pkg.name} not installed")
+                self.wlog.critical(f"{pkg.name} not installed")
                 pkg.install(recover=True)
         return True
