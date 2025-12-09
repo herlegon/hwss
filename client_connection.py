@@ -436,7 +436,6 @@ class ClientConnectionHandler:
 
             except asyncio.TimeoutError:
                 # Normal timeout, continue loop
-                print("timeout, continue")
                 continue
 
             except asyncio.CancelledError:
@@ -515,9 +514,9 @@ class ClientConnectionHandler:
 
         for res in results:
             if isinstance(res, Exception):
-                print(lightblue(f"[{self.client_id}] ❌  worker stop error: {res}"))
+                slog.error(lightblue(f"[{self.client_id}] ❌  worker stop error: {res}"))
             else:
-                print(lightblue(f"[{self.client_id}] {res}"))
+                slog.debug(lightblue(f"[{self.client_id}] {res}"))
 
         slog.info(lightblue(f"[{self.client_id}] ℹ️  all workers stopped."))
 

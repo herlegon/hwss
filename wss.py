@@ -83,13 +83,13 @@ class BackendServer:
         """
         handler = self.clients.pop(client_id, None)
         if handler:
-            print(f"[Server] unregister_client: closing handler")
+            slog.debug(f"[Server] unregister_client: closing handler")
             await handler.close()
 
         if not self.clients:
             self.last_client_disconnect_time = time.time()
 
-        print(f"[Server] Client {client_id} disconnected (total={len(self.clients)})")
+        slog.debug(f"[Server] Client {client_id} disconnected (total={len(self.clients)})")
 
 
     async def handle_new_client(self, server_connection: ServerConnection):
@@ -107,12 +107,12 @@ class BackendServer:
             await server_connection.close(code=1001, reason="Server shutting down")
             return
 
-        print(f"[Server] Client connected: {client_id} (total={len(self.clients)})")
+        slog.info(f"[Server] Client connected: {client_id} (total={len(self.clients)})")
         handler: ClientConnectionHandler = self.clients[client_id]
         try:
             await handler.handle()
         except Exception as e:
-            print(f"[Server] Client {client_id} error: {e}")
+            slog.error(f"[Server] Client {client_id} error: {e}")
         finally:
             await self.unregister_client(client_id)
 
@@ -331,7 +331,12 @@ async def main():
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=49990)
     parser.add_argument("--keep_alive", action="store_true")
+    parser.add_argument("--debug", action="store_true", help="Enable debug output")
     args = parser.parse_args()
+
+    # Configure debug mode
+    from logger import set_debug_mode
+    set_debug_mode(args.debug)
 
     slog.info("[S] Server starting")
     host, port = args.host, args.port
