@@ -51,7 +51,7 @@ class WsLoggingHandler(logging.Handler):
                     type='msg',
                     payload={'type': msg_type, 'text': self.format(record)}
                 )
-            
+
             # Put message in the client's queue (non-blocking)
             try:
                 self.client_queue.put_nowait(event_msg)
@@ -129,9 +129,9 @@ def setup_queue_listener(
     # Console handler (optional)
     console_handler = logging.StreamHandler(sys.stdout)
     if mode == 'dev' and enable_stdout:
-        console_handler.setLevel(logging.INFO)
+        console_handler.setLevel(logging.DEBUG)
     elif mode == 'prod':
-        console_handler.setLevel(logging.ERROR)
+        console_handler.setLevel(logging.WARNING)
     console_handler.setFormatter(StdOutLoggerFormatter())
     handlers.append(console_handler)
 
@@ -288,13 +288,13 @@ def setup_worker_logger(
             package_name = getattr(progress_data, 'package_name', 'unknown')
             record = self.makeRecord(
                 self.name, PROGRESS_LEVEL, "(progress)", 0,
-                f"Progress: {package_name}", 
+                f"Progress: {package_name}",
                 (), None
             )
             # Attach the progress data to the record (convert to dict for serialization)
             record.progress_data = asdict(progress_data) if hasattr(progress_data, '__dataclass_fields__') else progress_data
             self.handle(record)
-    
+
     # Bind the method to the logger instance
     import types
     worker_logger.progress = types.MethodType(progress, worker_logger)
@@ -305,11 +305,18 @@ def setup_worker_logger(
         try:
             from hinstall.logger import ilog
             from hinstall_ws_handler import HInstallWebSocketHandler
-            
+
+            # Remove all StreamHandlers (stdout) from ilog to prevent debug messages
+            # from being printed to console in production mode (when enable_stdout is False)
+            if not enable_stdout:
+                for handler in ilog.handlers[:]:
+                    if isinstance(handler, logging.StreamHandler):
+                        ilog.removeHandler(handler)
+
             # Create a callback that sends to emit_queue
             def send_to_emit_queue(event_msg):
                 emit_queue.put(event_msg)
-            
+
             # Create and add the handler
             hinstall_handler = HInstallWebSocketHandler(send_to_emit_queue)
             hinstall_handler.setLevel(logging.INFO)  # Will include PROGRESS (25)

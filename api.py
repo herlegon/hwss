@@ -90,8 +90,8 @@ class ParseTask:
     cache: bool = True
     local_backend: bool = False
     reinstall: bool = False
-    use_local_host: bool = False
-    local_host: str = ""
+    use_local_rehost: bool = False
+    local_rehost: str = ""
 
 
 @dataclass(slots=True)
@@ -186,8 +186,8 @@ def deserialize(msg: ResponseMessage | EventMessage) -> dict | None:
 #       'cfg': str (json.dumps)
 #       'local_backend': bool
 #       'reinstall': bool
-#       'use_local_host': bool
-#       'local_host': str
+#       'use_local_rehost': bool
+#       'local_rehost': str
 #   }
 
 # task_id: 'install'

@@ -79,8 +79,8 @@ class InstallWorker(mp.Process):
         self.app: str = "hconvert"
         self.cache: bool = True
         self.reinstall: bool = False
-        self.use_local_host: bool = True
-        self.local_host: str = ""
+        self.use_local_rehost: bool = True
+        self.local_rehost: str = ""
         self.keep_up_to_date: bool = False
         self.packages_cfg : dict[str, str] = {}
         self.py_packages: PyPackages = None
@@ -194,23 +194,28 @@ class InstallWorker(mp.Process):
 
         self.local_backend: bool = task.local_backend
         self.reinstall: bool = task.reinstall
-        self.use_local_host: bool = task.use_local_host
-        self.local_host: str = task.local_host
+        self.use_local_rehost: bool = task.use_local_rehost
         self.cache = task.cache
 
         self.log.info(f"Backend python: {str(g_backend_dirs.python_exe)}")
         self.packages_cfg = parse_config_(toml_cfg)
 
-        # for i in range(10):
-        #     self.log.progress(
-        #         InstallProgress(
-        #             task_id=task.task_id,
-        #             type='progress',
-        #             progress=10.*i
-        #         )
-        #     )
-        #     time.sleep(0.5)
+        msg: str = "\n  ".join([
+            f"Install settings:"
+            f"Local backend: {self.local_backend}",
+            f"Reinstall: {self.reinstall}",
+            f"Use local rehost for dl: {self.use_local_rehost}",
+            f"Local rehost: {task.local_rehost}",
+            f"Cache downloaded files: {self.cache}",
+        ])
+        self.log.debug(msg)
 
+        if self.use_local_rehost:
+            g_backend_dirs.local_rehost = (
+                task.local_rehost if task.local_rehost
+                else self.get_rehost_dir()
+            )
+        self.log.info(f"Use local rehost: {g_backend_dirs.local_rehost}")
 
         self.send({
             'task_id': task.task_id,
@@ -224,13 +229,6 @@ class InstallWorker(mp.Process):
         if self.local_backend:
             return
 
-
-        if self.use_local_host:
-            g_backend_dirs.local_host = (
-                self.local_host if self.local_host
-                else self.get_rehost_dir()
-            )
-
         # All packages except python
         ext_packages = ExtPackages(self.packages_cfg, sys.platform)
         packages_to_install = ext_packages.get_all_except('python')
@@ -241,7 +239,7 @@ class InstallWorker(mp.Process):
                 packages=packages_to_install,
                 reinstall=self.reinstall,
                 threads=1,
-                use_local_host=self.use_local_host
+                use_local_rehost=self.use_local_rehost
             )
             if installed:
                 self.log.info(lightgreen("All packages installed"))
@@ -289,14 +287,12 @@ class InstallWorker(mp.Process):
             keep_up_to_date=self.keep_up_to_date
         )
 
-        cpu_count = mp.cpu_count()
-        cpu_count = max(cpu_count - 1, int(cpu_count * 4 / 5))
-
         # List all packages that are required before installing the AI computation resources
         initial_pkgs = self.py_packages.get_initial()
         to_install_pkgs = initial_pkgs.get_not_installed()
         if self.keep_up_to_date:
             self.log.debug(f"TODO: keep_up_to_date")
+
 
         # If all packages already installed, no need to restart
         if not to_install_pkgs:
@@ -306,6 +302,8 @@ class InstallWorker(mp.Process):
         # Use multithreading to update the packages info that are not installed
         # Connection to the internet for that
         start_time = time.time()
+        cpu_count = mp.cpu_count()
+        cpu_count = max(cpu_count - 1, int(cpu_count * 4 / 5))
         with ThreadPoolExecutor(
             max_workers=min(cpu_count, len(to_install_pkgs))
         ) as executor:
@@ -314,9 +312,9 @@ class InstallWorker(mp.Process):
         # TODO: what if fails to connect?
 
         # For debug
+        self.log.info(f"Packages to install: {', '.join([p.name for p in to_install_pkgs])}")
         for pkg in to_install_pkgs:
             pkg: PyPackage
-            self.log.info(f"Installing: {pkg.name} {pkg.version}")
             message: list[str] = "\n".join([
                 f"{lightcyan(pkg.name)}:\n    latest version: {pkg.latest_version}\n    selected: {pkg.version}",
                 f"    variant: {pkg.variant}",
@@ -324,6 +322,7 @@ class InstallWorker(mp.Process):
                 f"    wheel: {pkg.wheel}",
                 f"    wheel url: {pkg.wheel_url}",
                 f"    size: {pkg.size // 1024}kB",
+                f"    cache: {pkg.do_cache}",
             ])
             self.log.debug(message)
         self.log.debug(f"updated package list in {elapsed:.02f}s")
@@ -336,14 +335,24 @@ class InstallWorker(mp.Process):
             if pkg.size > 80000 and self.cache:
                 pkg.do_cache = True
 
+            # Debug
+            pkg.do_cache = True
+
+
             if pkg.do_cache:
                 start_time = time.time()
-                downloaded = pkg.download_wheel(force=False, use_pip=False)
+                print(red(f"download and cache: {self.use_local_rehost}, {g_backend_dirs.local_rehost}"))
+                downloaded = pkg.download_wheel(
+                    force=False,
+                    use_pip=False,
+                    use_local_rehost=self.use_local_rehost
+                )
+
                 elapsed = time.time() - start_time
                 if downloaded:
-                    self.log.debug(f"{pkg.name} downloaded in {elapsed:.02f}s")
+                    self.log.debug(f"Downloaded {pkg.name} in {elapsed:.02f}s")
                 else:
-                    self.log.debug(f"{pkg.name} failed to download")
+                    self.log.debug(f"Failed to download {pkg.name}")
 
         elapsed = time.time() - start_time
         if failed_packages:
@@ -353,10 +362,20 @@ class InstallWorker(mp.Process):
             self.log.info(f"Packages downloaded in {elapsed:.02f}s")
 
         # Install wheels
+        self.log.progress(
+            InstallProgress(
+                package_name="",
+                type='indet',
+                progress=0,
+            )
+        )
         start_time = time.time()
         failed_packages: list[str] = []
         for pkg in to_install_pkgs:
             self.log.debug(f"Install {pkg.name} (reinstall={self.reinstall})")
+            self.log.progress(InstallProgress(
+                package_name=pkg.pretty_name, type='indet', progress=0
+            ))
             pkg.install(reinstall=self.reinstall)
 
         elapsed = time.time() - start_time
@@ -372,9 +391,21 @@ class InstallWorker(mp.Process):
             self.log.info(f"Retry installing missing packages.")
             to_install_pkgs.update_installed_versions()
             for pkg in to_install_pkgs:
+                self.log.progress(InstallProgress(
+                    package_name=pkg.pretty_name, type='indet', progress=0
+                ))
                 pkg.install(recover=True)
                 if not pkg.installed:
+                    failed_packages.append(pkg.pretty_name)
                     self.log.critical(f"Failed to install package {pkg.name}")
+
+
+        self.log.progress(InstallProgress(
+            package_name=pkg.pretty_name,
+            type='indet',
+            status='success' if not failed_packages else 'failed',
+            progress=100,
+        ))
 
         return True
 
