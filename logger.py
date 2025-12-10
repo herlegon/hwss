@@ -13,8 +13,10 @@ import multiprocessing as mp
 slog: logging.Logger = None
 
 
-class WebSocketHandler(logging.Handler):
-    """Handler that sends log messages as WebSocket EventMessages to a specific client"""
+class WsLoggingHandler(logging.Handler):
+    """Handler that sends log messages as WebSocket EventMessages
+    to a specific client
+    """
 
     def __init__(self, client_queue: asyncio.Queue):
         """
@@ -23,6 +25,7 @@ class WebSocketHandler(logging.Handler):
         """
         super().__init__()
         self.client_queue = client_queue
+
 
     def emit(self, record: logging.LogRecord):
         try:
@@ -34,11 +37,14 @@ class WebSocketHandler(logging.Handler):
             # Put message in the client's queue (non-blocking)
             try:
                 self.client_queue.put_nowait(event_msg)
+
             except asyncio.QueueFull:
                 # Queue is full, skip this message
                 pass
+
         except Exception:
             self.handleError(record)
+
 
     @staticmethod
     def _levelname_to_message_type(levelname: str) -> MessageType:
@@ -125,34 +131,26 @@ def setup_queue_listener(
 
 def setup_server_logging(
     log_queue: mp.Queue,
-    mode: Literal['dev', 'prod'] = 'dev',
-    enable_stdout: bool = True,
 ) -> logging.Logger:
     """
     Setup logging for server events (startup, shutdown, connections).
     Called once at server startup. Uses QueueHandler to send logs to centralized listener.
-
-    Args:
-        log_queue: Multiprocessing queue for centralized logging
-        mode: 'dev' or 'prod'
-        enable_stdout: Whether to also print to stdout (dev mode only)
-
-    Returns:
-        Server logger instance
     """
 
     # ===== SERVER LOGGER =====
     server_logger = logging.getLogger('server')
     server_logger.setLevel(logging.DEBUG)
     server_logger.handlers.clear()
-    server_logger.propagate = False  # Don't propagate to root logger
+    # Don't propagate to root logger
+    server_logger.propagate = False
 
     # Queue handler (sends all logs to centralized listener)
     queue_handler = logging.handlers.QueueHandler(log_queue)
     queue_handler.setLevel(logging.DEBUG)
     server_logger.addHandler(queue_handler)
 
-    # # Optional stdout handler for dev mode (in addition to queue)
+    # Optional stdout handler for dev mode (in addition to queue)
+    # Not needed because it's already done by the centralized listener (queue handler)
     # if mode == 'dev' and enable_stdout:
     #     console_handler = logging.StreamHandler(sys.stdout)
     #     console_handler.setLevel(logging.INFO)
@@ -190,14 +188,15 @@ def setup_client_logger(
     client_logger = logging.getLogger(logger_name)
     client_logger.setLevel(logging.DEBUG)
     client_logger.handlers.clear()
-    client_logger.propagate = False  # Don't propagate to parent loggers
+      # Don't propagate to parent loggers
+    client_logger.propagate = False
 
     # WebSocket handler (sends to this specific client's queue)
     # Only send INFO and above to client (DEBUG is for server-side debugging only)
-    wss_handler = WebSocketHandler(client_queue)
-    wss_handler.setLevel(logging.INFO)
-    wss_handler.setFormatter(logging.Formatter('%(message)s'))
-    client_logger.addHandler(wss_handler)
+    ws_logging_handler = WsLoggingHandler(client_queue)
+    ws_logging_handler.setLevel(logging.INFO)
+    ws_logging_handler.setFormatter(logging.Formatter('%(message)s'))
+    client_logger.addHandler(ws_logging_handler)
 
     # Queue handler for centralized file logging
     queue_handler = logging.handlers.QueueHandler(log_queue)

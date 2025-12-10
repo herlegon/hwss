@@ -1,8 +1,10 @@
 import os
 import signal
 import sys
-import logger
-from logger import setup_server_logging, setup_queue_listener, slog
+import logging
+import logging.handlers
+
+from logger import setup_server_logging, setup_queue_listener
 import logging
 from websockets import (
     ServerConnection,
@@ -25,9 +27,8 @@ import multiprocessing as mp
 import uuid
 import time
 
-# logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(message)s")
 
-
+main_log = logging.getLogger(__name__)
 
 
 class BackendServer:
@@ -50,6 +51,10 @@ class BackendServer:
         self.show_wss_messages: bool = show_wss_messages
         self.log_queue: mp.Queue = log_queue
 
+        # Setup server logging (uses queue)
+        self.log: logging.Logger = setup_server_logging(log_queue=log_queue)
+
+
         # Shutdown logic tracking
         self.shutdown_event = shutdown_event
         self._shutdown_future: asyncio.Future = None
@@ -69,7 +74,7 @@ class BackendServer:
     def register_client(self, server_connection: ServerConnection) -> str | None:
         """Register a new client connection, returns the uuid"""
         if self._shutting_down:
-            slog.warning("Refusing new connection - server is shutting down")
+            self.log.warning("Refusing new connection - server is shutting down")
             return None
 
         self.has_ever_connected = True
@@ -84,7 +89,7 @@ class BackendServer:
             log_queue=self.log_queue
         )
         self.clients[client_id] = handler
-        slog.info(f"Client registerd: {client_id}")
+        self.log.info(f"Client registerd: {client_id}")
         return client_id
 
 
@@ -93,13 +98,13 @@ class BackendServer:
         """
         handler = self.clients.pop(client_id, None)
         if handler:
-            slog.debug(f"[Server] unregister_client: closing handler")
+            self.log.debug(f"[Server] unregister_client: closing handler")
             await handler.close()
 
         if not self.clients:
             self.last_client_disconnect_time = time.time()
 
-        slog.debug(f"[Server] Client {client_id} disconnected (total={len(self.clients)})")
+        self.log.debug(f"[Server] Client {client_id} disconnected (total={len(self.clients)})")
 
 
     async def handle_new_client(self, server_connection: ServerConnection):
@@ -107,7 +112,7 @@ class BackendServer:
         """
         # Check if we're shutting down before accepting
         if self._shutting_down:
-            slog.info("[S] Rejecting connection - server is shutting down")
+            self.log.info("[S] Rejecting connection - server is shutting down")
             await server_connection.close(code=1001, reason="Server shutting down")
             return
 
@@ -117,12 +122,12 @@ class BackendServer:
             await server_connection.close(code=1001, reason="Server shutting down")
             return
 
-        slog.info(f"[Server] Client connected: {client_id} (total={len(self.clients)})")
+        self.log.info(f"[Server] Client connected: {client_id} (total={len(self.clients)})")
         handler: ClientConnectionHandler = self.clients[client_id]
         try:
             await handler.handle()
         except Exception as e:
-            slog.error(f"[Server] Client {client_id} error: {e}")
+            self.log.error(f"[Server] Client {client_id} error: {e}")
         finally:
             await self.unregister_client(client_id)
 
@@ -147,7 +152,7 @@ class BackendServer:
 
 
     async def _monitor_shutdown_task(self):
-        slog.info("[S] Starting shutdown monitor")
+        self.log.info("[S] Starting shutdown monitor")
         while not self._shutting_down:
             try:
                 await asyncio.wait_for(self.shutdown_event.wait(), timeout=2)
@@ -159,7 +164,7 @@ class BackendServer:
             # 1. No client ever connected: shutdown after 10s
             if self.has_ever_connected_timeout and not self.has_ever_connected:
                 if now - self.start_time > self.has_ever_connected_timeout:
-                    slog.warning("[S] Shutdown monitor: No client connected within 10s")
+                    self.log.warning("[S] Shutdown monitor: No client connected within 10s")
                     if self.shutdown_event:
                         self.shutdown_event.set()
                     return
@@ -174,7 +179,7 @@ class BackendServer:
                     self.last_client_disconnect_time
                     and now - self.last_client_disconnect_time > self.no_new_client_timeout
                 ):
-                     slog.warning("[S] Shutdown monitor: No clients after previous connection")
+                     self.log.warning("[S] Shutdown monitor: No clients after previous connection")
                      if self.shutdown_event:
                         self.shutdown_event.set()
                      return
@@ -185,7 +190,7 @@ class BackendServer:
                 and client_count > 0
             ):
                 if now - self.last_activity_time > self.inactive_client_timeout:
-                    slog.warning(f"[S] Shutdown monitor: Inactive client (last activity: {now - self.last_activity_time:.1f}s ago)")
+                    self.log.warning(f"[S] Shutdown monitor: Inactive client (last activity: {now - self.last_activity_time:.1f}s ago)")
                     if self.shutdown_event:
                         self.shutdown_event.set()
                     return
@@ -196,13 +201,13 @@ class BackendServer:
         """
         if self.shutdown_for_inactivity:
             asyncio.create_task(self._monitor_shutdown_task())
-        slog.info(f"Starting WebSocket server on {self.host}:{self.port}")
+        self.log.info(f"Starting WebSocket server on {self.host}:{self.port}")
         self._server = await serve(
             self.handle_new_client,
             self.host,
             self.port,
         )
-        slog.info(f"Server listening on {self.host}:{self.port}")
+        self.log.info(f"Server listening on {self.host}:{self.port}")
         print("READY", file=sys.stdout, flush=True)
 
         # Create a future that can be set to stop the server
@@ -212,21 +217,21 @@ class BackendServer:
         try:
             await self._shutdown_future
         except asyncio.CancelledError:
-            slog.info("[S] Server run task cancelled")
+            self.log.info("[S] Server run task cancelled")
             raise
         finally:
-            slog.info("[S] Server run loop ended")
+            self.log.info("[S] Server run loop ended")
 
 
     async def shutdown(self) -> None:
         """Initiate graceful shutdown sequence
         """
         if self._shutting_down:
-            slog.info("[S] Shutdown already in progress")
+            self.log.info("[S] Shutdown already in progress")
             return
         self._shutting_down = True
 
-        slog.info("[S] Shutting down server...")
+        self.log.info("[S] Shutting down server...")
 
         # Signal the run() loop to stop gracefully
         if self._shutdown_future and not self._shutdown_future.done():
@@ -234,7 +239,7 @@ class BackendServer:
 
         # Close all client connections
         if self.clients:
-            slog.info(f"[S] Notifying {len(self.clients)} client(s) of shutdown...")
+            self.log.info(f"[S] Notifying {len(self.clients)} client(s) of shutdown...")
             handlers = list(self.clients.values())
 
             # Stop all client handlers (they will notify clients and stop workers)
@@ -247,43 +252,43 @@ class BackendServer:
                     timeout=20
                 )
             except asyncio.TimeoutError:
-                slog.warning("[S] Timeout while closing client handlers")
+                self.log.warning("[S] Timeout while closing client handlers")
 
             self.clients.clear()
-            slog.info("[S] All clients disconnected")
+            self.log.info("[S] All clients disconnected")
 
         # Stop accepting new connections
         if self._server:
             self._server.close()
             await self._server.wait_closed()
-        slog.info("[S] Server shutdown")
+        self.log.info("[S] Server shutdown")
 
         # Terminate remaining child processes if any
         active_children = mp.active_children()
         if active_children:
-            slog.warning(f"Still have {len(active_children)} active child processes:")
+            self.log.warning(f"Still have {len(active_children)} active child processes:")
             for child in active_children:
-                slog.warning(f"  - {child.name} (PID: {child.pid})")
-                slog.warning(f"  Terminating child process {child.name} (PID {child.pid})")
+                self.log.warning(f"  - {child.name} (PID: {child.pid})")
+                self.log.warning(f"  Terminating child process {child.name} (PID {child.pid})")
                 child.terminate()
 
             # Wait for children to actually exit
             for child in active_children:
                 child.join(timeout=1.0)
                 if child.is_alive():
-                    slog.error(f"  Child {child.name} (PID {child.pid}) failed to terminate")
+                    self.log.error(f"  Child {child.name} (PID {child.pid}) failed to terminate")
 
         # Cancel remaining asyncio tasks (except current)
         current_task = asyncio.current_task()
         pending = [t for t in asyncio.all_tasks() if t is not current_task and not t.done()]
         if pending:
-            slog.warning(f"Cancelling {len(pending)} pending tasks...")
+            self.log.warning(f"Cancelling {len(pending)} pending tasks...")
             for t in pending:
-                slog.warning(f"  Cancelling task: {t.get_coro().__name__}")
+                self.log.warning(f"  Cancelling task: {t.get_coro().__name__}")
                 t.cancel()
             await asyncio.gather(*pending, return_exceptions=True)
 
-        slog.info("[S] Shutdown complete")
+        self.log.info("[S] Shutdown complete")
 
 
 
@@ -305,11 +310,11 @@ def setup_signal_handlers(
             sig_name = f"Signal {signum}"
 
         if signal_count < force_kill_after:
-            slog.info(f"Received {sig_name} ({signal_count}/{force_kill_after}) — graceful shutdown")
+            main_log.info(f"Received {sig_name} ({signal_count}/{force_kill_after}) — graceful shutdown")
             shutdown_event.set()  # trigger shutdown in main
 
         else:
-            slog.error(f"Received {sig_name} {signal_count} times — forcing immediate termination!")
+            main_log.error(f"Received {sig_name} {signal_count} times — forcing immediate termination!")
             if os.name == "nt":
                 # Windows: exit immediately
                 os._exit(1)
@@ -346,28 +351,27 @@ async def main():
     log_file = args.log_file
     if log_file is None and args.mode == 'prod':
         log_file = 'server.log'  # Default production log file
+
     elif log_file is None and not (args.mode == 'dev' and not args.no_stdout):
         log_file = 'server_dev.log'  # Dev mode with no stdout
 
     # Create centralized logging queue and listener
-    log_queue = mp.Queue(-1)  # Unlimited size
+    log_queue = mp.Queue(-1)
     queue_listener = setup_queue_listener(
         log_queue=log_queue,
         log_file=log_file,
         enable_stdout=not args.no_stdout,
         mode=args.mode,
     )
-    queue_listener.start()  # Start the listener thread
+    queue_listener.start()
 
-    # Setup server logging (uses queue)
-    global slog
-    slog = logger.slog = setup_server_logging(
-        log_queue=log_queue,
-        mode=args.mode,
-        enable_stdout=not args.no_stdout,
-    )
+    # Setup module-level logger with queue handler
+    main_log.handlers.clear()
+    main_log.addHandler(logging.handlers.QueueHandler(log_queue))
+    main_log.setLevel(logging.DEBUG if args.mode == 'dev' else logging.INFO)
 
-    slog.info("[S] Server starting")
+
+    main_log.info("[S] Server starting")
     host, port = args.host, args.port
 
     shutdown_event = asyncio.Event()
@@ -392,7 +396,7 @@ async def main():
     try:
         # Wait for shutdown signal
         await shutdown_event.wait()
-        slog.info("[S] Shutdown event triggered, starting server shutdown...")
+        main_log.info("[S] Shutdown event triggered, starting server shutdown...")
 
         # Perform graceful shutdown
         await server.shutdown()
@@ -402,26 +406,27 @@ async def main():
             try:
                 await asyncio.wait_for(server_task, timeout=15.0)
             except asyncio.TimeoutError:
-                slog.warning("Server task did not complete in time, cancelling...")
+                main_log.warning("Server task did not complete in time, cancelling...")
                 server_task.cancel()
                 try:
                     await server_task
                 except asyncio.CancelledError:
-                    slog.info("[S] Server task cancelled successfully")
+                    main_log.info("[S] Server task cancelled successfully")
 
     except Exception as e:
-        slog.error(f"Error during shutdown: {str(e)}", exc_info=True)
+        main_log.error(f"Error during shutdown: {str(e)}", exc_info=True)
         if not server_task.done():
             server_task.cancel()
             try:
                 await server_task
             except asyncio.CancelledError:
-                slog.info("[S] Server task cancelled due to error")
+                main_log.info("[S] Server task cancelled due to error")
 
-    slog.info("[S] Main exiting")
+    main_log.info("[S] Main exiting")
 
     # Stop the queue listener
     queue_listener.stop()
+
 
 
 if __name__ == "__main__":
@@ -429,10 +434,10 @@ if __name__ == "__main__":
     try:
         asyncio.run(main())
     except Exception as e:
-        slog.critical(f"Fatal error: {e}", exc_info=True)
+        main_log.critical(f"Fatal error: {e}", exc_info=True)
         sys.exit(1)
 
-    slog.info("[S] Process exit")
+    main_log.info("[S] Process exit")
 
 
 
