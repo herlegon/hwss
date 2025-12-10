@@ -10,7 +10,7 @@ import sys
 import time
 from hytils import lightcyan, lightgreen, purple, red, yellow
 from logger import setup_worker_logger, slog
-from api import WorkerResponse
+from api import InstallProgress, WorkerResponse
 import multiprocessing as mp
 from multiprocessing.synchronize import Event
 from typing import Literal
@@ -92,14 +92,14 @@ class InstallWorker(mp.Process):
 
         # Setup worker logger (must be done inside run(), after process starts)
         self.log = setup_worker_logger(
-            self.worker_name,
-            self.log_queue,
-            self.result_queue,
+            worker_name=self.worker_name,
+            emit_queue=self.result_queue,
+            log_queue=self.log_queue,
             enable_stdout=self.enable_stdout
         )
 
 
-        self.log.info(purple(f"[{self.pid}] worker process started"))
+        self.log.debug(purple(f"[{self.pid}] worker process started"))
 
         while not self.stop_event.is_set():
 
@@ -109,7 +109,7 @@ class InstallWorker(mp.Process):
 
                 # Route to appropriate task handler
                 if task_id == 'stop':
-                    self.log.info(purple(f"[{self.pid}] received stop command"))
+                    self.log.debug(purple(f"[{self.pid}] received stop command"))
                     break
 
                 elif task_id == 'parse':
@@ -151,7 +151,7 @@ class InstallWorker(mp.Process):
             except Exception as e:
                 self.log.warning(f"[{self.pid}] Failed to remove hinstall handler: {e}")
 
-        self.log.info(purple(f"[{self.pid}] ℹ️ terminated"))
+        self.log.debug(purple(f"[{self.pid}] ℹ️ terminated"))
 
 
 
@@ -200,6 +200,17 @@ class InstallWorker(mp.Process):
         self.cache = task.cache
 
         self.packages_cfg = parse_config_(toml_cfg)
+
+        for i in range(10):
+            self.log.progress(
+                InstallProgress(
+                    task_id=task.task_id,
+                    type='progress',
+                    progress=10.*i
+                )
+            )
+            time.sleep(0.5)
+
 
         self.send({
             'task_id': task.task_id,

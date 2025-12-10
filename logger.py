@@ -241,7 +241,7 @@ def setup_worker_logger(
     worker_logger.propagate = False
 
     ws_logging_handler = WsLoggingHandler(emit_queue)
-    ws_logging_handler.setLevel(logging.WARNING)
+    ws_logging_handler.setLevel(logging.INFO)
     ws_logging_handler.setFormatter(logging.Formatter('%(message)s'))
     worker_logger.addHandler(ws_logging_handler)
 
