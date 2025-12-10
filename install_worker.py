@@ -290,28 +290,84 @@ class InstallWorker(mp.Process):
         if self.keep_up_to_date:
             self.log.debug(f"TODO: keep_up_to_date")
 
-
         # If all packages already installed, no need to restart
         if not to_install_pkgs:
             self.log.debug(f"All packages installed")
             return False
 
-        # Use multithreading to update the packages info that are not installed
-        # Connection to the internet for that
+        return self._process_packages(to_install_pkgs)
+
+
+    def handle_install_py_packages_2nd_stage(self) -> bool:
+        if self.py_packages is None:
+            self.py_packages = PyPackages(
+                self.packages_cfg,
+                sys.platform,
+                keep_up_to_date=self.keep_up_to_date
+            )
+
+        to_install_pkgs = self.py_packages.get_delayed()
+
+        from hsys import is_feature_supported
+
+        cuda = is_feature_supported('cuda')
+        tensorrt = is_feature_supported('tensorrt')
+        directml = is_feature_supported('directml')
+        rocm = is_feature_supported('rocm')
+
+        self.log.debug(f"CUDA: {'✅' if cuda else '❌'}")
+        self.log.debug(f"TensorRT: {'✅' if tensorrt else '❌'}")
+        self.log.debug(f"direct ML: {'✅' if directml else '❌'}")
+        self.log.debug(f"RocM: {'✅' if rocm else '❌'}")
+
+        for pkg in to_install_pkgs.get_by_execution_provider('cuda'):
+            pkg.skip = not cuda
+            pkg.supported = cuda
+
+        for pkg in to_install_pkgs.get_by_execution_provider('rocm'):
+            pkg.skip = not rocm
+            pkg.supported = rocm
+
+        for pkg in to_install_pkgs.get_by_execution_provider('directml'):
+            pkg.skip = not directml
+            pkg.supported = directml
+
+        cpu_fallback = all([x is False for x in (cuda, tensorrt, rocm)])
+        for pkg in to_install_pkgs.get_by_execution_provider('cpu'):
+            pkg.skip = not cpu_fallback
+            pkg.supported = cpu_fallback
+
+
+        self.log.debug("supported packages")
+        supported_pkgs = to_install_pkgs.get_delayed(supported_only=True)
+        for pkg in supported_pkgs:
+            self.log.debug(lightcyan(pkg.pretty_name))
+            self.log.debug(f"Package details: {pkg}")
+
+        return self._process_packages(supported_pkgs)
+
+
+    def _process_packages(self, packages: list[PyPackage]) -> bool:
+        """
+        Common logic to update info, download, and install a list of packages.
+        """
+        if not packages:
+            return False
+
+        # Use multithreading to update the packages info
         start_time = time.time()
         cpu_count = mp.cpu_count()
         cpu_count = max(cpu_count - 1, int(cpu_count * 4 / 5))
         with ThreadPoolExecutor(
-            max_workers=min(cpu_count, len(to_install_pkgs))
+            max_workers=min(cpu_count, len(packages))
         ) as executor:
-            executor.map(lambda pkg: pkg.update_info(), to_install_pkgs)
+            executor.map(lambda pkg: pkg.update_info(), packages)
         elapsed = time.time() - start_time
         self.log.info(f"Fetch package versions in {elapsed:.02f}s")
 
         # For debug
-        self.log.info(f"Packages to install: {', '.join([p.name for p in to_install_pkgs])}")
-        for pkg in to_install_pkgs:
-            pkg: PyPackage
+        self.log.info(f"Packages to process: {', '.join([p.name for p in packages])}")
+        for pkg in packages:
             message: list[str] = "\n".join([
                 f"{lightcyan(pkg.name)}:",
                 f"    installed: {pkg.installed}",
@@ -326,6 +382,11 @@ class InstallWorker(mp.Process):
             ])
             self.log.debug(message)
         self.log.debug(f"updated package list in {elapsed:.02f}s")
+
+        # Filter packages that need installation
+        to_install_pkgs = [pkg for pkg in packages if not pkg.installed]
+        if not to_install_pkgs:
+            return False
 
         # Download wheels
         dl_start_time = time.time()
@@ -385,6 +446,9 @@ class InstallWorker(mp.Process):
         if failed_packages:
             failed_packages: list[str] = []
             self.log.info(f"Retry installing missing packages.")
+            # Update installed versions for all packages to check if retry is needed
+            # (Wait, update_installed_versions is a method on PyPackages, but here we have a list)
+            # We can just check pkg.installed after install(recover=True)
             to_install_pkgs.update_installed_versions()
             for pkg in to_install_pkgs:
                 self.log.progress(InstallProgress(
@@ -395,173 +459,8 @@ class InstallWorker(mp.Process):
                     failed_packages.append(pkg.pretty_name)
                     self.log.critical(f"Failed to install package {pkg.name}")
 
-
         self.log.progress(InstallProgress(
-            package_name=pkg.pretty_name,
-            type='indet',
-            status='success' if not failed_packages else 'failed',
-            progress=100,
-        ))
-
-        return True
-
-
-    def handle_install_py_packages_2nd_stage(self) -> bool:
-        if self.py_packages is None:
-            self.py_packages = PyPackages(
-                self.packages_cfg,
-                sys.platform,
-                keep_up_to_date=self.keep_up_to_date
-            )
-
-        to_install_pkgs = self.py_packages.get_delayed()
-
-        from hsys import is_feature_supported
-
-        cuda = is_feature_supported('cuda')
-        tensorrt = is_feature_supported('tensorrt')
-        directml = is_feature_supported('directml')
-        rocm = is_feature_supported('rocm')
-
-        self.log.debug(f"CUDA: {'✅' if cuda else '❌'}")
-        self.log.debug(f"TensorRT: {'✅' if tensorrt else '❌'}")
-        self.log.debug(f"direct ML: {'✅' if directml else '❌'}")
-        self.log.debug(f"RocM: {'✅' if rocm else '❌'}")
-
-        start_time = time.time()
-
-        for pkg in to_install_pkgs.get_by_execution_provider('cuda'):
-            pkg.skip = not cuda
-            pkg.supported = cuda
-
-        for pkg in to_install_pkgs.get_by_execution_provider('rocm'):
-            pkg.skip = not rocm
-            pkg.supported = rocm
-
-        for pkg in to_install_pkgs.get_by_execution_provider('directml'):
-            pkg.skip = not directml
-            pkg.supported = directml
-
-        cpu_fallback = all([x is False for x in (cuda, tensorrt, rocm)])
-        for pkg in to_install_pkgs.get_by_execution_provider('cpu'):
-            pkg.skip = not cpu_fallback
-            pkg.supported = cpu_fallback
-
-
-        self.log.debug("supported packages")
-        supported_pkgs = to_install_pkgs.get_delayed(supported_only=True)
-        for pkg in supported_pkgs:
-            self.log.debug(lightcyan(pkg.pretty_name))
-            self.log.debug(f"Package details: {pkg}")
-
-
-        # Use multithreading to update the packages info that are not installed
-        # Connection to the internet for that
-        cpu_count = mp.cpu_count()
-        cpu_count = max(cpu_count - 1, int(cpu_count * 4 / 5))
-        with ThreadPoolExecutor(
-            max_workers=min(cpu_count, len(supported_pkgs))
-        ) as executor:
-            executor.map(lambda pkg: pkg.update_info(), supported_pkgs)
-        elapsed = time.time() - start_time
-        self.log.info(f"Fetch package versions in {elapsed:.02f}s")
-
-        # For debug
-        self.log.info(f"Supported packages: {', '.join([p.name for p in to_install_pkgs])}")
-        for pkg in supported_pkgs:
-            pkg: PyPackage
-            message: list[str] = "\n".join([
-                f"{lightcyan(pkg.name)}:",
-                f"    installed: {pkg.installed}",
-                f"    latest version: {pkg.latest_version}",
-                f"    selected: {pkg.version}",
-                f"    variant: {pkg.variant}",
-                f"    installed version: {pkg.installed_version}",
-                f"    wheel: {pkg.wheel}",
-                f"    wheel url: {pkg.wheel_url}",
-                f"    size: {pkg.size // 1024}kB",
-                f"    cache: {pkg.do_cache}",
-            ])
-            self.log.debug(message)
-        self.log.debug(f"updated package list in {elapsed:.02f}s")
-
-        to_install_pkgs = [pkg for pkg in supported_pkgs if not pkg.installed]
-        if len(to_install_pkgs) == 0:
-            return False
-
-        # Download wheels
-        dl_start_time = time.time()
-        failed_packages: list[str] = []
-        for pkg in to_install_pkgs:
-            if not pkg.do_cache:
-                continue
-
-            start_time = time.time()
-            downloaded = pkg.download_wheel(
-                force=False,
-                use_pip=False,
-                use_local_rehost=self.use_local_rehost
-            )
-
-            if not pkg.download_wheel(force=False, use_pip=False):
-                failed_packages.append(pkg.name)
-
-                elapsed = time.time() - start_time
-                if downloaded:
-                    self.log.debug(f"Downloaded {pkg.name} in {elapsed:.02f}s")
-                else:
-                    failed_packages.append(pkg.name)
-                    self.log.debug(f"Failed to download {pkg.name}")
-
-        elapsed = time.time() - dl_start_time
-        if failed_packages:
-            self.log.error(f"Failed to download package(s): {', '.join(failed_packages)}")
-            return True
-
-        else:
-            self.log.info(f"Packages downloaded in {elapsed:.02f}s")
-
-        # Install python packages
-        self.log.progress(
-            InstallProgress(
-                package_name="",
-                type='indet',
-                progress=0,
-            )
-        )
-        start_time = time.time()
-        failed_packages: list[str] = []
-        for pkg in to_install_pkgs:
-            self.log.debug(f"Install {pkg.name} (reinstall={self.reinstall})")
-            self.log.progress(InstallProgress(
-                package_name=pkg.pretty_name, type='indet', progress=0
-            ))
-            pkg.install(reinstall=self.reinstall)
-
-        elapsed = time.time() - start_time
-        if failed_packages:
-            self.log.error(f"Failed to install package(s): {', '.join(failed_packages)}")
-            time.sleep(1.)
-        else:
-            self.log.info(f"Packages installed in {elapsed:.02f}s")
-
-        # Retry packages
-        if failed_packages:
-            failed_packages: list[str] = []
-            self.log.info(f"Retry installing missing packages.")
-            to_install_pkgs.update_installed_versions()
-            for pkg in to_install_pkgs:
-                self.log.progress(InstallProgress(
-                    package_name=pkg.pretty_name, type='indet', progress=0
-                ))
-                pkg.install(recover=True)
-                if not pkg.installed:
-                    failed_packages.append(pkg.pretty_name)
-                    self.log.critical(f"Failed to install package {pkg.name}")
-
-
-        self.log.progress(InstallProgress(
-            package_name=pkg.pretty_name,
+            package_name="",
             type='indet',
             status='success' if not failed_packages else 'failed',
             progress=100,
