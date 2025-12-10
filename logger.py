@@ -117,6 +117,8 @@ def setup_queue_listener(
         file_handler.setFormatter(
             logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
         )
+        # Filter out PROGRESS level messages
+        file_handler.addFilter(lambda record: record.levelno != PROGRESS_LEVEL)
         handlers.append(file_handler)
 
     # Console handler (optional)
@@ -126,6 +128,8 @@ def setup_queue_listener(
     else:
         console_handler.setLevel(logging.WARNING)
     console_handler.setFormatter(StdOutLoggerFormatter())
+    # Filter out PROGRESS level messages
+    console_handler.addFilter(lambda record: record.levelno != PROGRESS_LEVEL)
     handlers.append(console_handler)
 
     # Create and return the listener
@@ -278,12 +282,11 @@ def setup_worker_logger(
             from hinstall.logger import ilog
             from hinstall_ws_handler import HInstallWebSocketHandler
 
-            # Remove all StreamHandlers (stdout) from ilog to prevent debug messages
-            # from being printed to console in production mode (when devmode is False)
-            if not devmode:
-                for handler in ilog.handlers[:]:
-                    if isinstance(handler, logging.StreamHandler):
-                        ilog.removeHandler(handler)
+            # Remove all StreamHandlers (stdout) from ilog to prevent duplicate messages
+            # (since queue_handler will forward them to the central listener which handles stdout)
+            for handler in ilog.handlers[:]:
+                if isinstance(handler, logging.StreamHandler):
+                    ilog.removeHandler(handler)
 
             # Create a callback that sends to emit_queue
             def send_to_emit_queue(event_msg):
@@ -293,6 +296,10 @@ def setup_worker_logger(
             hinstall_handler = HInstallWebSocketHandler(send_to_emit_queue)
             hinstall_handler.setLevel(logging.INFO)
             ilog.addHandler(hinstall_handler)
+            
+            # Also add the queue handler to ilog so messages go to the server log file
+            ilog.addHandler(queue_handler)
+            
             worker_logger.debug(f"Added WebSocket handler to hinstall logger")
 
         except Exception as e:

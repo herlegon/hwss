@@ -341,7 +341,6 @@ class InstallWorker(mp.Process):
 
             if pkg.do_cache:
                 start_time = time.time()
-                print(red(f"download and cache: {self.use_local_rehost}, {g_backend_dirs.local_rehost}"))
                 downloaded = pkg.download_wheel(
                     force=False,
                     use_pip=False,
