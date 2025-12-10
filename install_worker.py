@@ -199,17 +199,18 @@ class InstallWorker(mp.Process):
         self.local_host: str = task.local_host
         self.cache = task.cache
 
+        self.log.info(f"Backend python: {str(g_backend_dirs.python_exe)}")
         self.packages_cfg = parse_config_(toml_cfg)
 
-        for i in range(10):
-            self.log.progress(
-                InstallProgress(
-                    task_id=task.task_id,
-                    type='progress',
-                    progress=10.*i
-                )
-            )
-            time.sleep(0.5)
+        # for i in range(10):
+        #     self.log.progress(
+        #         InstallProgress(
+        #             task_id=task.task_id,
+        #             type='progress',
+        #             progress=10.*i
+        #         )
+        #     )
+        #     time.sleep(0.5)
 
 
         self.send({
@@ -293,7 +294,6 @@ class InstallWorker(mp.Process):
         cpu_count = max(cpu_count - 1, int(cpu_count * 4 / 5))
 
         initial_pkgs = self.py_packages.get_initial()
-        self.log.info(f"Backend python: {str(g_backend_dirs.python_exe)}")
 
         to_install_pkgs = initial_pkgs.get_not_installed()
         if self.keep_up_to_date:

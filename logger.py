@@ -6,8 +6,12 @@ import queue
 import sys
 from typing import Literal
 
-from api import EventMessage, MessageType
+from api import EventMessage, MessageType, InstallProgress
 import multiprocessing as mp
+
+# Custom log level for progress updates
+PROGRESS_LEVEL = 25  # Between INFO (20) and WARNING (30)
+logging.addLevelName(PROGRESS_LEVEL, 'PROGRESS')
 
 # Server logger
 slog: logging.Logger = None
@@ -29,11 +33,25 @@ class WsLoggingHandler(logging.Handler):
 
     def emit(self, record: logging.LogRecord):
         try:
-            msg_type = self._levelname_to_message_type(record.levelname)
-            event_msg = EventMessage(
-                type='msg',
-                payload={'type': msg_type, 'text': self.format(record)}
-            )
+            # Special handling for PROGRESS level
+            if record.levelno == PROGRESS_LEVEL:
+                # The message should be an InstallProgress object
+                if hasattr(record, 'progress_data'):
+                    event_msg = EventMessage(
+                        type='progress',
+                        payload=record.progress_data
+                    )
+                else:
+                    # Fallback if progress_data not found
+                    return
+            else:
+                # Regular log message
+                msg_type = self._levelname_to_message_type(record.levelname)
+                event_msg = EventMessage(
+                    type='msg',
+                    payload={'type': msg_type, 'text': self.format(record)}
+                )
+            
             # Put message in the client's queue (non-blocking)
             try:
                 self.client_queue.put_nowait(event_msg)
@@ -241,7 +259,7 @@ def setup_worker_logger(
     worker_logger.propagate = False
 
     ws_logging_handler = WsLoggingHandler(emit_queue)
-    ws_logging_handler.setLevel(logging.INFO)
+    ws_logging_handler.setLevel(logging.INFO)  # Will include PROGRESS (25)
     ws_logging_handler.setFormatter(logging.Formatter('%(message)s'))
     worker_logger.addHandler(ws_logging_handler)
 
@@ -259,6 +277,24 @@ def setup_worker_logger(
             logging.Formatter(f'[WORKER-{worker_name}] %(levelname)s: %(message)s')
         )
         worker_logger.addHandler(console_handler)
+
+    # Add custom progress() method to logger
+    def progress(self, progress_data: InstallProgress):
+        """Log a progress update that will be sent to WebSocket client"""
+        if self.isEnabledFor(PROGRESS_LEVEL):
+            package_name = getattr(progress_data, 'package_name', 'unknown')
+            record = self.makeRecord(
+                self.name, PROGRESS_LEVEL, "(progress)", 0,
+                f"Progress: {package_name}", 
+                (), None
+            )
+            # Attach the progress data to the record (convert to dict for serialization)
+            record.progress_data = asdict(progress_data) if hasattr(progress_data, '__dataclass_fields__') else progress_data
+            self.handle(record)
+    
+    # Bind the method to the logger instance
+    import types
+    worker_logger.progress = types.MethodType(progress, worker_logger)
 
     return worker_logger
 
