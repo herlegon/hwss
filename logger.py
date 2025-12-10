@@ -165,7 +165,7 @@ def setup_server_logging(
 
 def setup_client_logger(
     client_id: str,
-    client_queue: asyncio.Queue,
+    emit_queue: asyncio.Queue,
     log_queue: mp.Queue,
     enable_stdout: bool = False,
 ) -> logging.Logger:
@@ -188,12 +188,11 @@ def setup_client_logger(
     client_logger = logging.getLogger(logger_name)
     client_logger.setLevel(logging.DEBUG)
     client_logger.handlers.clear()
-      # Don't propagate to parent loggers
     client_logger.propagate = False
 
     # WebSocket handler (sends to this specific client's queue)
     # Only send INFO and above to client (DEBUG is for server-side debugging only)
-    ws_logging_handler = WsLoggingHandler(client_queue)
+    ws_logging_handler = WsLoggingHandler(emit_queue)
     ws_logging_handler.setLevel(logging.INFO)
     ws_logging_handler.setFormatter(logging.Formatter('%(message)s'))
     client_logger.addHandler(ws_logging_handler)
@@ -218,6 +217,7 @@ def setup_client_logger(
 
 def setup_worker_logger(
     worker_name: str,
+    emit_queue: mp.Queue,
     log_queue: mp.Queue,
     enable_stdout: bool = False,
 ) -> logging.Logger:
@@ -239,6 +239,12 @@ def setup_worker_logger(
     worker_logger.setLevel(logging.DEBUG)
     worker_logger.handlers.clear()
     worker_logger.propagate = False
+
+    ws_logging_handler = WsLoggingHandler(emit_queue)
+    ws_logging_handler.setLevel(logging.WARNING)
+    ws_logging_handler.setFormatter(logging.Formatter('%(message)s'))
+    worker_logger.addHandler(ws_logging_handler)
+
 
     # Queue handler (sends all logs to centralized listener in main process)
     queue_handler = logging.handlers.QueueHandler(log_queue)

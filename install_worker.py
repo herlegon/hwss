@@ -94,22 +94,10 @@ class InstallWorker(mp.Process):
         self.log = setup_worker_logger(
             self.worker_name,
             self.log_queue,
+            self.result_queue,
             enable_stdout=self.enable_stdout
         )
 
-        # Setup hinstall logger to forward messages to WebSocket client
-        try:
-            from hinstall.logger import ilog
-            from hinstall_ws_handler import HInstallWebSocketHandler
-
-            self.hinstall_ws_handler = HInstallWebSocketHandler(self.send)
-            self.hinstall_ws_handler.setLevel(logging.INFO)
-            ilog.addHandler(self.hinstall_ws_handler)
-            self.log.debug(f"[{self.pid}] Added WebSocket handler to hinstall logger")
-
-        except Exception as e:
-            self.log.warning(f"[{self.pid}] Failed to setup hinstall WebSocket handler: {e}")
-            self.hinstall_ws_handler = None
 
         self.log.info(purple(f"[{self.pid}] worker process started"))
 
