@@ -471,7 +471,7 @@ class ClientConnectionHandler:
         Attempt to gracefully stop a single worker process.
         Blocks for up to `timeout` seconds.
         """
-        self.log.info(f"Stopping worker {name}...")
+        self.log.debug(f"Stopping worker {name}...")
 
         w = self.workers.get(name)
         if not w:
