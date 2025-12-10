@@ -71,7 +71,8 @@ class InstallWorker(mp.Process):
         self.enable_stdout: bool = enable_stdout
 
         # Logger will be set up in run() after process starts
-        self.wlog = None
+        # otherwise, it's not running in the process
+        self.log = None
 
         self.daemon = True
 
@@ -90,7 +91,7 @@ class InstallWorker(mp.Process):
         signal.signal(signal.SIGINT, signal.SIG_IGN)
 
         # Setup worker logger (must be done inside run(), after process starts)
-        self.wlog = setup_worker_logger(
+        self.log = setup_worker_logger(
             self.worker_name,
             self.log_queue,
             enable_stdout=self.enable_stdout
@@ -104,12 +105,13 @@ class InstallWorker(mp.Process):
             self.hinstall_ws_handler = HInstallWebSocketHandler(self.send)
             self.hinstall_ws_handler.setLevel(logging.INFO)
             ilog.addHandler(self.hinstall_ws_handler)
-            self.wlog.debug(f"[{self.pid}] Added WebSocket handler to hinstall logger")
+            self.log.debug(f"[{self.pid}] Added WebSocket handler to hinstall logger")
+
         except Exception as e:
-            self.wlog.warning(f"[{self.pid}] Failed to setup hinstall WebSocket handler: {e}")
+            self.log.warning(f"[{self.pid}] Failed to setup hinstall WebSocket handler: {e}")
             self.hinstall_ws_handler = None
 
-        self.wlog.info(purple(f"[{self.pid}] worker process started"))
+        self.log.info(purple(f"[{self.pid}] worker process started"))
 
         while not self.stop_event.is_set():
 
@@ -119,12 +121,12 @@ class InstallWorker(mp.Process):
 
                 # Route to appropriate task handler
                 if task_id == 'stop':
-                    self.wlog.info(purple(f"[{self.pid}] received stop command"))
+                    self.log.info(purple(f"[{self.pid}] received stop command"))
                     break
 
                 elif task_id == 'parse':
                     task: ParseTask = ParseTask(**data)
-                    self.wlog.debug(f"Parse toml for {task.app_name}")
+                    self.log.debug(f"Parse toml for {task.app_name}")
                     self.handle_parse_cfg(task)
 
                 elif task_id == 'install':
@@ -149,19 +151,19 @@ class InstallWorker(mp.Process):
                 continue
 
             except Exception as e:
-                self.wlog.error(purple(f"[{self.pid}] uncaught exception: {str(e)}, data={data}"))
-                self.wlog.critical(f"worker: {str(e)}")
+                self.log.error(purple(f"[{self.pid}] uncaught exception: {str(e)}, data={data}"))
+                self.log.critical(f"worker: {str(e)}")
 
         # Cleanup hinstall WebSocket handler
         if hasattr(self, 'hinstall_ws_handler') and self.hinstall_ws_handler:
             try:
                 from hinstall.logger import ilog
                 ilog.removeHandler(self.hinstall_ws_handler)
-                self.wlog.debug(f"[{self.pid}] Removed WebSocket handler from hinstall logger")
+                self.log.debug(f"[{self.pid}] Removed WebSocket handler from hinstall logger")
             except Exception as e:
-                self.wlog.warning(f"[{self.pid}] Failed to remove hinstall handler: {e}")
+                self.log.warning(f"[{self.pid}] Failed to remove hinstall handler: {e}")
 
-        self.wlog.info(purple(f"[{self.pid}] ℹ️ terminated"))
+        self.log.info(purple(f"[{self.pid}] ℹ️ terminated"))
 
 
 
@@ -243,11 +245,11 @@ class InstallWorker(mp.Process):
                 use_local_host=self.use_local_host
             )
             if installed:
-                self.wlog.info(lightgreen("All packages installed"))
+                self.log.info(lightgreen("All packages installed"))
             else:
-                self.wlog.error(red("Error: missing package(s)"))
+                self.log.error(red("Error: missing package(s)"))
         else:
-            self.wlog.error(lightgreen("No packages to install"))
+            self.log.error(lightgreen("No packages to install"))
 
         self.send({
             'task_id': task.task_id,
@@ -269,7 +271,7 @@ class InstallWorker(mp.Process):
             status = 'installed'
 
         except Exception as e:
-            self.wlog.critical(f"Exception: {str(e)}")
+            self.log.critical(f"Exception: {str(e)}")
             return
 
         self.send({
@@ -292,14 +294,14 @@ class InstallWorker(mp.Process):
         cpu_count = max(cpu_count - 1, int(cpu_count * 4 / 5))
 
         initial_pkgs = self.py_packages.get_initial()
-        self.wlog.info(f"Backend python: {str(g_backend_dirs.python_exe)}")
+        self.log.info(f"Backend python: {str(g_backend_dirs.python_exe)}")
 
         to_install_pkgs = initial_pkgs.get_not_installed()
         if self.keep_up_to_date:
-            self.wlog.debug(f"TODO: keep_up_to_date")
+            self.log.debug(f"TODO: keep_up_to_date")
 
         if not to_install_pkgs:
-            self.wlog.debug(f"All packages installed")
+            self.log.debug(f"All packages installed")
             return False
 
         # Note: All ilog messages are automatically forwarded to WebSocket client
@@ -314,7 +316,7 @@ class InstallWorker(mp.Process):
 
         for pkg in to_install_pkgs:
             pkg: PyPackage
-            self.wlog.info(f"Installing: {pkg.name} {pkg.version}")
+            self.log.info(f"Installing: {pkg.name} {pkg.version}")
             message: list[str] = "\n".join([
                 f"{lightcyan(pkg.name)}:\n    latest version: {pkg.latest_version}\n    selected: {pkg.version}",
                 f"    variant: {pkg.variant}",
@@ -323,8 +325,8 @@ class InstallWorker(mp.Process):
                 f"    wheel url: {pkg.wheel_url}",
                 f"    size: {pkg.size // 1024}kB",
             ])
-            self.wlog.debug(message)
-        self.wlog.debug(f"updated package list in {elapsed:.02f}s")
+            self.log.debug(message)
+        self.log.debug(f"updated package list in {elapsed:.02f}s")
 
         for pkg in to_install_pkgs:
             # Cache packages with size > 80MB
@@ -336,17 +338,17 @@ class InstallWorker(mp.Process):
                 downloaded = pkg.download_wheel(force=False, use_pip=False)
                 elapsed = time.time() - start_time
                 if downloaded:
-                    self.wlog.info(f"{pkg.name} downloaded in {elapsed:.02f}s")
+                    self.log.info(f"{pkg.name} downloaded in {elapsed:.02f}s")
                 else:
-                    self.wlog.error(f"{pkg.name} failed to download")
+                    self.log.error(f"{pkg.name} failed to download")
 
-            self.wlog.debug(f"Install {pkg.name} (reinstall={self.reinstall})")
+            self.log.debug(f"Install {pkg.name} (reinstall={self.reinstall})")
             pkg.install(reinstall=self.reinstall)
 
         to_install_pkgs.update_installed_versions()
         for pkg in to_install_pkgs:
             if not pkg.installed:
-                self.wlog.client_error(f"Failed to install {pkg.name}. Retry.")
+                self.log.client_error(f"Failed to install {pkg.name}. Retry.")
                 success = pkg.install(recover=True)
 
         # Restart required
@@ -371,10 +373,10 @@ class InstallWorker(mp.Process):
         directml = is_feature_supported('directml')
         rocm = is_feature_supported('rocm')
 
-        self.wlog.debug(f"CUDA: {'✅' if cuda else '❌'}")
-        self.wlog.debug(f"TensorRT: {'✅' if tensorrt else '❌'}")
-        self.wlog.debug(f"direct ML: {'✅' if directml else '❌'}")
-        self.wlog.debug(f"RocM: {'✅' if rocm else '❌'}")
+        self.log.debug(f"CUDA: {'✅' if cuda else '❌'}")
+        self.log.debug(f"TensorRT: {'✅' if tensorrt else '❌'}")
+        self.log.debug(f"direct ML: {'✅' if directml else '❌'}")
+        self.log.debug(f"RocM: {'✅' if rocm else '❌'}")
 
         start_time = time.time()
 
@@ -396,11 +398,11 @@ class InstallWorker(mp.Process):
             pkg.supported = cpu_fallback
 
 
-        self.wlog.debug("supported packages")
+        self.log.debug("supported packages")
         supported_pkgs = pkgs.get_delayed(supported_only=True)
         for pkg in supported_pkgs:
-            self.wlog.debug(lightcyan(pkg.pretty_name))
-            self.wlog.debug(f"Package details: {pkg}")
+            self.log.debug(lightcyan(pkg.pretty_name))
+            self.log.debug(f"Package details: {pkg}")
 
         cpu_count = mp.cpu_count()
         cpu_count = max(cpu_count - 1, int(cpu_count * 4 / 5))
@@ -412,14 +414,14 @@ class InstallWorker(mp.Process):
 
         for pkg in supported_pkgs:
             pkg: PyPackage
-            self.wlog.debug(f"{lightcyan(pkg.name)}:\n    latest version: {pkg.latest_version}\n    selected: {pkg.version}")
-            self.wlog.debug(f"    installed: {pkg.installed}")
-            self.wlog.debug(f"    variant: {pkg.variant}")
-            self.wlog.debug(f"    wheel: {pkg.wheel}")
-            self.wlog.debug(f"    wheel url: {pkg.wheel_url}")
-            self.wlog.debug(f"    size: {pkg.size // 1024}kB")
-            self.wlog.debug(f"    do cache: {pkg.do_cache}")
-        self.wlog.info(f"updated in {elapsed:.02f}s")
+            self.log.debug(f"{lightcyan(pkg.name)}:\n    latest version: {pkg.latest_version}\n    selected: {pkg.version}")
+            self.log.debug(f"    installed: {pkg.installed}")
+            self.log.debug(f"    variant: {pkg.variant}")
+            self.log.debug(f"    wheel: {pkg.wheel}")
+            self.log.debug(f"    wheel url: {pkg.wheel_url}")
+            self.log.debug(f"    size: {pkg.size // 1024}kB")
+            self.log.debug(f"    do cache: {pkg.do_cache}")
+        self.log.info(f"updated in {elapsed:.02f}s")
 
 
         # print("Packages to install: ", lightcyan(", ".join((pkg.name for pkg in to_install_pkgs))))
@@ -435,12 +437,12 @@ class InstallWorker(mp.Process):
             start_time = time.time()
             downloaded = pkg.download_wheel(force=False, use_pip=False)
             if downloaded:
-                self.wlog.info(f"{pkg.name} downloaded in {elapsed:.02f}s")
+                self.log.info(f"{pkg.name} downloaded in {elapsed:.02f}s")
             else:
-                self.wlog.error(f"{pkg.name} failed to download")
+                self.log.error(f"{pkg.name} failed to download")
 
             elapsed = time.time() - start_time
-            self.wlog.info(f"{pkg.name} downloaded in {elapsed:.02f}s")
+            self.log.info(f"{pkg.name} downloaded in {elapsed:.02f}s")
             # print(lightcyan("-" * 80))
 
         # install
@@ -451,6 +453,6 @@ class InstallWorker(mp.Process):
         pkgs.update_installed_versions()
         for pkg in supported_pkgs:
             if not pkg.installed:
-                self.wlog.critical(f"{pkg.name} not installed")
+                self.log.critical(f"{pkg.name} not installed")
                 pkg.install(recover=True)
         return True

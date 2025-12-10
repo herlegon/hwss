@@ -77,7 +77,7 @@ class ClientConnectionHandler:
         self.enable_wss_stdout = enable_wss_stdout
 
         # Setup client-specific logger
-        self.clog = setup_client_logger(
+        self.log = setup_client_logger(
             self.client_id,
             self.to_client,
             log_queue=log_queue,
@@ -103,13 +103,13 @@ class ClientConnectionHandler:
 
         data = deserialize(msg)
         if data is None:
-            self.clog.warning(f"⚠️ Received invalid JSON: {msg}")
+            self.log.warning(f"⚠️ Received invalid JSON: {msg}")
             return
 
         try:
             request = RequestMessage(**data)
         except Exception as e:
-            self.clog.warning(f"exception: {str(e)}")
+            self.log.warning(f"exception: {str(e)}")
             return
 
         request_type = request.type
@@ -125,7 +125,7 @@ class ClientConnectionHandler:
                 )
                 return
 
-            self.clog.debug("route shutdown message")
+            self.log.debug("route shutdown message")
             if self.server and self.server.shutdown_event:
                 await self.to_client.put(
                     ResponseMessage(type='shutdown', payload="allowed")
@@ -133,7 +133,7 @@ class ClientConnectionHandler:
                 self.server.shutdown_event.set()
 
             else:
-                self.clog.warning("No server or shutdown_event reference, force closing client")
+                self.log.warning("No server or shutdown_event reference, force closing client")
                 await self.close()
 
 
@@ -155,7 +155,7 @@ class ClientConnectionHandler:
 
 
         elif request_type == 'stop':
-            self.clog.info(f"[{self.client_id}] Received stop command")
+            self.log.info(f"[{self.client_id}] Received stop command")
             if self.server:
                 # Schedule shutdown on the event loop to avoid blocking current handler
                 asyncio.create_task(self.server.shutdown())
@@ -177,11 +177,11 @@ class ClientConnectionHandler:
             if WORKER_AVAILABLE:
                 self.submit_task_to_worker(self.worker_name, request.payload)
             else:
-                self.clog.error("Cannot execute task: System is in Setup Mode.")
+                self.log.error("Cannot execute task: System is in Setup Mode.")
 
 
         else:
-            self.clog.debug(lightblue(f"[{self.client_id}] ⚠️ Unknown message type: {request_type}"))
+            self.log.debug(lightblue(f"[{self.client_id}] ⚠️ Unknown message type: {request_type}"))
 
 
 
@@ -196,20 +196,20 @@ class ClientConnectionHandler:
                 await self.route_message(msg)
 
         except asyncio.CancelledError:
-            self.clog.debug(f"[{self.client_id}] Reception task cancelled")
+            self.log.debug(f"[{self.client_id}] Reception task cancelled")
             raise
 
         except websockets.ConnectionClosedOK:
-            self.clog.debug(lightblue(f"[{self.client_id}] connection closed"))
+            self.log.debug(lightblue(f"[{self.client_id}] connection closed"))
 
         except websockets.ConnectionClosedError as e:
-            self.clog.debug(lightblue(f"[{self.client_id}] ⚠️  disconnected with error: {e}"))
+            self.log.debug(lightblue(f"[{self.client_id}] ⚠️  disconnected with error: {e}"))
 
         except Exception as e:
-            self.clog.debug(lightblue(f"[{self.client_id}][W] exception while running reception handler: {e}"))
+            self.log.debug(lightblue(f"[{self.client_id}] ⚠️  exception while running reception handler: {e}"))
 
         finally:
-            self.clog.debug(lightblue(f"[{self.client_id}] Reception task ended"))
+            self.log.debug(lightblue(f"[{self.client_id}] Reception task ended"))
 
 
     async def send_message_task(self):
@@ -234,17 +234,17 @@ class ClientConnectionHandler:
                 continue
 
             except asyncio.CancelledError:
-                self.clog.debug(lightblue(f"[{self.client_id}] Sending task cancelled"))
+                self.log.debug(lightblue(f"[{self.client_id}] Sending task cancelled"))
                 break
 
             except websockets.ConnectionClosed:
-                self.clog.debug(lightblue(f"[{self.client_id}] Connection closed while sending"))
+                self.log.debug(lightblue(f"[{self.client_id}] Connection closed while sending"))
                 break
 
             except Exception as e:
-                self.clog.error(lightblue(f"[{self.client_id}] Failed to send message: {e}"))
+                self.log.error(lightblue(f"[{self.client_id}] Failed to send message: {e}"))
 
-        self.clog.debug(lightblue(f"[{self.client_id}] Send task ended"))
+        self.log.debug(lightblue(f"[{self.client_id}] Send task ended"))
 
 
 
@@ -253,7 +253,7 @@ class ClientConnectionHandler:
         Start the send/recv loops for this client.
         Returns when the client disconnects or stop() is called.
         """
-        self.clog.debug(lightblue(f"[{self.client_id}] handler started"))
+        self.log.debug(lightblue(f"[{self.client_id}] handler started"))
 
         # Start websocket loops
         reception_task = asyncio.create_task(self.reception_task())
@@ -273,26 +273,26 @@ class ClientConnectionHandler:
                 return_when=asyncio.FIRST_COMPLETED
             )
 
-            self.clog.debug(lightblue(f"[{self.client_id}] First task completed, stopping others"))
+            self.log.debug(lightblue(f"[{self.client_id}] First task completed, stopping others"))
 
         except asyncio.CancelledError:
-            self.clog.debug(lightblue(f"[{self.client_id}] Handler tasks cancelled"))
+            self.log.debug(lightblue(f"[{self.client_id}] Handler tasks cancelled"))
 
         except Exception as e:
-            self.clog.error(lightblue(f"[{self.client_id}] Exception in handler: {e}"))
+            self.log.error(lightblue(f"[{self.client_id}] Exception in handler: {e}"))
 
         finally:
             if not self.closing:
                 await self.close()
 
-        self.clog.debug(lightblue(f"[{self.client_id}] handler ended"))
+        self.log.debug(lightblue(f"[{self.client_id}] handler ended"))
 
 
 
     async def shutdown_websocket(self):
         """Stop all tasks and workers for this client."""
         if self.closing:
-            self.clog.debug(lightblue(f"[{self.client_id}][W] Already closing"))
+            self.log.debug(lightblue(f"[{self.client_id}] ⚠️  Already closing"))
             return
 
         # Optional: notify client of shutdown
@@ -320,13 +320,13 @@ class ClientConnectionHandler:
                 self.server_connection.close(code=1000, reason="Server shutting down"),
                 timeout=1.0
             )
-            self.clog.debug(lightblue(f"[{self.client_id}][W] shutdown_websocket: WebSocket closed"))
+            self.log.debug(lightblue(f"[{self.client_id}] ⚠️  shutdown_websocket: WebSocket closed"))
 
         except asyncio.TimeoutError:
-            self.clog.debug(lightblue(f"[{self.client_id}][W] shutdown_websocket: WebSocket close timed out"))
+            self.log.debug(lightblue(f"[{self.client_id}] ⚠️  shutdown_websocket: WebSocket close timed out"))
 
         except Exception as e:
-            self.clog.error(lightblue(f"[{self.client_id}] shutdown_websocket: Error closing WebSocket: {e}"))
+            self.log.error(lightblue(f"[{self.client_id}] shutdown_websocket: Error closing WebSocket: {e}"))
 
         await asyncio.sleep(0.05)
 
@@ -346,7 +346,7 @@ class ClientConnectionHandler:
                     task.cancel()
                     cancelled_tasks.append(task)
                 except Exception as e:
-                    self.clog.warning(f"[{self.client_id}][W] Error cancelling task {i}: {e}")
+                    self.log.warning(f"[{self.client_id}] ⚠️  Error cancelling task {i}: {e}")
 
         # Wait for cancelled tasks with timeout
         if cancelled_tasks:
@@ -356,13 +356,13 @@ class ClientConnectionHandler:
                     timeout=1.0
                 )
             except asyncio.TimeoutError:
-                self.clog.warning(f"[{self.client_id}][W] Task cancellation timed out")
+                self.log.warning(f"[{self.client_id}] ⚠️  Task cancellation timed out")
             except Exception as e:
-                self.clog.warning(f"[{self.client_id}][W] Error gathering tasks: {e}")
+                self.log.warning(f"[{self.client_id}] ⚠️  Error gathering tasks: {e}")
 
-            self.clog.debug(lightblue(f"[{self.client_id}] All async tasks stopped"))
+            self.log.debug(lightblue(f"[{self.client_id}] All async tasks stopped"))
 
-        self.clog.debug(lightblue(f"[{self.client_id}] Stop sequence complete"))
+        self.log.debug(lightblue(f"[{self.client_id}] Stop sequence complete"))
 
 
     def start_worker(self, name: str):
@@ -370,7 +370,7 @@ class ClientConnectionHandler:
         Create and start a worker process.
         """
         if name in self.workers and self.workers[name]['worker'].is_alive():
-            self.clog.debug(lightblue(f"[{self.client_id}][W] Worker {name} already running"))
+            self.log.debug(lightblue(f"[{self.client_id}] ⚠️  Worker {name} already running"))
             return
 
         task_queue = mp.Queue()
@@ -386,7 +386,7 @@ class ClientConnectionHandler:
                 )
                 worker.start()
             except Exception as e:
-                self.clog.error(f"[{self.client_id}] Failed to start worker '{name}'")
+                self.log.error(f"[{self.client_id}] Failed to start worker '{name}'")
                 return
 
         self.workers[name] = {
@@ -397,7 +397,7 @@ class ClientConnectionHandler:
 
         # Start async loop to forward results from this worker
         self.tasks.append(asyncio.create_task(self.worker_result_loop(name)))
-        self.clog.debug(lightblue(f"[{self.client_id}] Worker {name} started: {worker.pid}"))
+        self.log.debug(lightblue(f"[{self.client_id}] Worker {name} started: {worker.pid}"))
 
 
     def submit_task_to_worker(self, name: str, task):
@@ -418,7 +418,7 @@ class ClientConnectionHandler:
                 task_queue.put(task, block=False)
 
             except Exception as e:
-                self.clog.error(lightblue(
+                self.log.error(lightblue(
                     f"[{self.client_id}] failed to submit task to worker {name}: {str(e)}"
                 ))
 
@@ -427,13 +427,13 @@ class ClientConnectionHandler:
         """
         Async loop to forward worker results to the to_client queue.
         """
-        self.clog.debug(lightblue(f"[{self.client_id}] start a worker result loop for {name}"))
+        self.log.debug(lightblue(f"[{self.client_id}] start a worker result loop for {name}"))
 
         loop = asyncio.get_running_loop()
         result_queue: mp.Queue = self.workers[name]['result_queue']
 
         if not result_queue:
-            self.clog.error(lightblue(f"[{self.client_id}] No result queue for worker {name}"))
+            self.log.error(lightblue(f"[{self.client_id}] No result queue for worker {name}"))
             return
 
         while not self.closing:
@@ -456,15 +456,15 @@ class ClientConnectionHandler:
                 continue
 
             except asyncio.CancelledError:
-                self.clog.debug(lightblue(f"[{self.client_id}][W] worker result loop cancelled for {name}"))
+                self.log.debug(lightblue(f"[{self.client_id}] ⚠️  worker result loop cancelled for {name}"))
                 break
 
             except Exception as e:
                 if not self.closing:
-                    self.clog.debug(lightblue(f"[{self.client_id}] Error in worker result loop: {str(e)}"))
+                    self.log.debug(lightblue(f"[{self.client_id}] Error in worker result loop: {str(e)}"))
                 break
 
-        self.clog.debug(lightblue(f"[{self.client_id}] worker result loop for {name} ended"))
+        self.log.debug(lightblue(f"[{self.client_id}] worker result loop for {name} ended"))
 
 
     def stop_worker(self, name: str, timeout: float = 2.0):
@@ -472,7 +472,7 @@ class ClientConnectionHandler:
         Attempt to gracefully stop a single worker process.
         Blocks for up to `timeout` seconds.
         """
-        self.clog.info(f"Stopping worker {name}...")
+        self.log.info(f"Stopping worker {name}...")
 
         w = self.workers.get(name)
         if not w:
@@ -483,13 +483,13 @@ class ClientConnectionHandler:
 
         # If it's still alive, kill it hard
         if worker.is_alive():
-            self.clog.debug(lightblue(f"[{self.client_id}][W] Force killing worker {name}"))
+            self.log.debug(lightblue(f"[{self.client_id}] ⚠️  Force killing worker {name}"))
             worker.terminate()
             worker.join(timeout=timeout + 1)
 
             if worker.is_alive():
                 import signal
-                self.clog.debug(lightblue(f"[{self.client_id}][W] SIGKILLing stubborn worker {name}"))
+                self.log.debug(lightblue(f"[{self.client_id}] ⚠️  SIGKILLing stubborn worker {name}"))
                 os.kill(worker.pid, signal.SIGKILL)
 
         del self.workers[name]
@@ -504,10 +504,10 @@ class ClientConnectionHandler:
     async def stop_workers(self):
         """Stop all worker processes gracefully"""
         if not self.workers:
-            self.clog.debug(lightblue(f"[{self.client_id}] No worker"))
+            self.log.debug(lightblue(f"[{self.client_id}] No worker"))
             return
 
-        self.clog.debug(lightblue(f"[{self.client_id}] Stopping {len(self.workers)} worker(s)"))
+        self.log.debug(lightblue(f"[{self.client_id}] Stopping {len(self.workers)} worker(s)"))
         # Immediately set the shared event
         self.stop_event.set()
 
@@ -531,18 +531,18 @@ class ClientConnectionHandler:
 
         for res in results:
             if isinstance(res, Exception):
-                self.clog.error(lightblue(f"[{self.client_id}] worker stop error: {res}"))
+                self.log.error(lightblue(f"[{self.client_id}] worker stop error: {res}"))
             else:
-                self.clog.debug(lightblue(f"[{self.client_id}] {res}"))
+                self.log.debug(lightblue(f"[{self.client_id}] {res}"))
 
-        self.clog.debug(lightblue(f"[{self.client_id}] all workers stopped."))
+        self.log.debug(lightblue(f"[{self.client_id}] all workers stopped."))
 
 
     async def close(self):
         # Run websocket shutdown and worker stop in parallel
         if not self.closing:
             self.closing = True
-            self.clog.debug(lightblue(f"[{self.client_id}] close handler"))
+            self.log.debug(lightblue(f"[{self.client_id}] close handler"))
             await asyncio.gather(
                 self.shutdown_websocket(),
                 self.stop_workers(),
@@ -562,7 +562,7 @@ class ClientConnectionHandler:
             if logger_name in logging.Logger.manager.loggerDict:
                 del logging.Logger.manager.loggerDict[logger_name]
 
-            self.clog.debug(lightblue(f"[{self.client_id}] handler fully closed"))
+            self.log.debug(lightblue(f"[{self.client_id}] handler fully closed"))
 
 
 
