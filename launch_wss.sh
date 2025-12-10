@@ -2,14 +2,10 @@
 
 /home/adg/.local/share/herlegon/python/bin/python -m pip uninstall \
     psutil \
-    nvidia-ml-py \
-    opencv-python \
-    numpy \
-    pillow \
     -y
 
 rm -rf /opt/herlegon/cache
 
-python wss.py --port 49990 --keep-alive --mode dev # --show-wss-messages
+python wss.py --port 49990 --keep-alive # --devmode
 
 

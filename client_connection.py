@@ -49,8 +49,8 @@ class ClientConnectionHandler:
         server_connection: ServerConnection,
         client_id: str,
         server: BackendServer,
-        enable_wss_stdout: bool = False,
         log_queue: mp.Queue | None = None,
+        devmode: bool = False
     ):
         """
         websocket: the connected websocket object
@@ -69,19 +69,18 @@ class ClientConnectionHandler:
         self.server = server
 
         # Async queues for websocket I/O
-        self.to_client = asyncio.Queue()
-        self.from_client = asyncio.Queue()
+        self.to_client_queue = asyncio.Queue()
 
         # Store for worker creation
         self.log_queue = log_queue
-        self.enable_wss_stdout = enable_wss_stdout
+        self.devmode = devmode
 
         # Setup client-specific logger
         self.log = setup_client_logger(
             self.client_id,
-            self.to_client,
+            self.to_client_queue,
             log_queue=log_queue,
-            enable_stdout=enable_wss_stdout
+            devmode=devmode
         )
 
         # Worker management
@@ -114,20 +113,20 @@ class ClientConnectionHandler:
 
         request_type = request.type
         if request_type == 'heartbeat':
-            await self.to_client.put(ResponseMessage(type='pong'))
+            await self.to_client_queue.put(ResponseMessage(type='pong'))
 
 
         elif request_type == 'shutdown':
             # Allow shutdown only if there is a single client
             if len(self.server.clients) > 1:
-                await self.to_client.put(
+                await self.to_client_queue.put(
                     ResponseMessage(type='shutdown', payload="denied")
                 )
                 return
 
             self.log.debug("route shutdown message")
             if self.server and self.server.shutdown_event:
-                await self.to_client.put(
+                await self.to_client_queue.put(
                     ResponseMessage(type='shutdown', payload="allowed")
                 )
                 self.server.shutdown_event.set()
@@ -146,7 +145,7 @@ class ClientConnectionHandler:
                     clients=len(self.server.clients) if self.server else 0
                 )
             )
-            await self.to_client.put(response)
+            await self.to_client_queue.put(response)
 
 
         elif request_type == 'restart':
@@ -219,7 +218,7 @@ class ClientConnectionHandler:
         while not self.closing:
             try:
                 message = await asyncio.wait_for(
-                    self.to_client.get(),
+                    self.to_client_queue.get(),
                     timeout=0.5
                 )
                 msg = (
@@ -382,7 +381,7 @@ class ClientConnectionHandler:
                     result_queue=result_queue,
                     stop_event=self.stop_event,
                     log_queue=self.log_queue,
-                    enable_stdout=self.enable_wss_stdout
+                    devmode=self.devmode,
                 )
                 worker.start()
             except Exception as e:
@@ -445,7 +444,7 @@ class ClientConnectionHandler:
                 if self.closing:
                     break
 
-                await self.to_client.put(result)
+                await self.to_client_queue.put(result)
 
             except queue.Empty:
                 # Normal, no message to process

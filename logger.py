@@ -9,6 +9,8 @@ from typing import Literal
 from api import EventMessage, MessageType, InstallProgress
 import multiprocessing as mp
 
+from hytils import red
+
 # Custom log level for progress updates
 PROGRESS_LEVEL = 25  # Between INFO (20) and WARNING (30)
 logging.addLevelName(PROGRESS_LEVEL, 'PROGRESS')
@@ -100,20 +102,11 @@ class StdOutLoggerFormatter(logging.Formatter):
 def setup_queue_listener(
     log_queue: mp.Queue,
     log_file: str | None = None,
-    mode: Literal['dev', 'prod'] = 'dev',
-    enable_stdout: bool = True,
+    devmode: bool = True,
 ) -> logging.handlers.QueueListener:
     """
     Setup a QueueListener that processes log records from all processes.
     This runs in the main process and writes to the log file.
-
-    Args:
-        log_queue: Multiprocessing queue for log records
-        log_file: Path to log file (if None, no file logging)
-        enable_stdout: Whether to also print to stdout
-
-    Returns:
-        QueueListener instance (must be started with .start())
     """
     handlers = []
 
@@ -128,9 +121,9 @@ def setup_queue_listener(
 
     # Console handler (optional)
     console_handler = logging.StreamHandler(sys.stdout)
-    if mode == 'dev' and enable_stdout:
+    if devmode:
         console_handler.setLevel(logging.DEBUG)
-    elif mode == 'prod':
+    else:
         console_handler.setLevel(logging.WARNING)
     console_handler.setFormatter(StdOutLoggerFormatter())
     handlers.append(console_handler)
@@ -149,27 +142,25 @@ def setup_queue_listener(
 
 def setup_server_logging(
     log_queue: mp.Queue,
+    devmode: bool = False,
 ) -> logging.Logger:
-    """
-    Setup logging for server events (startup, shutdown, connections).
-    Called once at server startup. Uses QueueHandler to send logs to centralized listener.
-    """
+    # Server logger: trace all messages, because there are not
+    # so many messages
 
-    # ===== SERVER LOGGER =====
     server_logger = logging.getLogger('server')
     server_logger.setLevel(logging.DEBUG)
     server_logger.handlers.clear()
     # Don't propagate to root logger
     server_logger.propagate = False
 
-    # Queue handler (sends all logs to centralized listener)
+    # Sends all logs to centralized listener
     queue_handler = logging.handlers.QueueHandler(log_queue)
     queue_handler.setLevel(logging.DEBUG)
     server_logger.addHandler(queue_handler)
 
     # Optional stdout handler for dev mode (in addition to queue)
     # Not needed because it's already done by the centralized listener (queue handler)
-    # if mode == 'dev' and enable_stdout:
+    # if devmode:
     #     console_handler = logging.StreamHandler(sys.stdout)
     #     console_handler.setLevel(logging.INFO)
     #     console_handler.setFormatter(logging.Formatter('[server] %(levelname)s: %(message)s'))
@@ -185,20 +176,11 @@ def setup_client_logger(
     client_id: str,
     emit_queue: asyncio.Queue,
     log_queue: mp.Queue,
-    enable_stdout: bool = False,
+    devmode: bool = False,
 ) -> logging.Logger:
     """
     Setup a client-specific logger that sends messages to that client's queue.
     Called once per client connection.
-
-    Args:
-        client_id: Unique client identifier
-        client_queue: The to_client asyncio.Queue for this specific client
-        log_queue: Multiprocessing queue for centralized file logging
-        enable_stdout: Whether to also print to stdout (for debugging)
-
-    Returns:
-        Client-specific logger instance
     """
 
     # Create a unique logger for this client
@@ -221,13 +203,13 @@ def setup_client_logger(
     client_logger.addHandler(queue_handler)
 
     # Optional stdout for debugging (shows ALL levels including DEBUG)
-    if enable_stdout:
-        console_handler = logging.StreamHandler(sys.stdout)
-        console_handler.setLevel(logging.DEBUG)
-        console_handler.setFormatter(
-            logging.Formatter(f'[WSS-{client_id[:7]}] %(levelname)s: %(message)s')
-        )
-        client_logger.addHandler(console_handler)
+    # if devmode:
+    #     console_handler = logging.StreamHandler(sys.stdout)
+    #     console_handler.setLevel(logging.DEBUG)
+    #     console_handler.setFormatter(
+    #         logging.Formatter(f'[WSS-{client_id[:7]}] %(levelname)s: %(message)s')
+    #     )
+    #     client_logger.addHandler(console_handler)
 
     return client_logger
 
@@ -237,22 +219,12 @@ def setup_worker_logger(
     worker_name: str,
     emit_queue: mp.Queue,
     log_queue: mp.Queue,
-    enable_stdout: bool = False,
     setup_hinstall: bool = True,
+    devmode: bool = False,
 ) -> tuple[logging.Logger, logging.Handler | None]:
     """
     Setup logging for a worker process.
     Called inside each worker process after it starts.
-
-    Args:
-        worker_name: Name of the worker
-        emit_queue: Multiprocessing queue for WebSocket messages
-        log_queue: Multiprocessing queue for centralized logging
-        enable_stdout: Whether to also print to stdout
-        setup_hinstall: Whether to setup hinstall logger handler
-
-    Returns:
-        Tuple of (worker logger instance, hinstall handler or None)
     """
 
     logger_name = f'worker.{worker_name}'
@@ -273,13 +245,13 @@ def setup_worker_logger(
     worker_logger.addHandler(queue_handler)
 
     # Optional stdout for debugging
-    if enable_stdout:
-        console_handler = logging.StreamHandler(sys.stdout)
-        console_handler.setLevel(logging.DEBUG)
-        console_handler.setFormatter(
-            logging.Formatter(f'[WORKER-{worker_name}] %(levelname)s: %(message)s')
-        )
-        worker_logger.addHandler(console_handler)
+    # if devmode:
+    #     console_handler = logging.StreamHandler(sys.stdout)
+    #     console_handler.setLevel(logging.DEBUG)
+    #     console_handler.setFormatter(
+    #         logging.Formatter(f'[WORKER-{worker_name}] %(levelname)s: %(message)s')
+    #     )
+    #     worker_logger.addHandler(console_handler)
 
     # Add custom progress() method to logger
     def progress(self, progress_data: InstallProgress):
@@ -299,7 +271,7 @@ def setup_worker_logger(
     import types
     worker_logger.progress = types.MethodType(progress, worker_logger)
 
-    # Setup hinstall logger to forward messages to WebSocket client
+    # Forward message to the websocket client
     hinstall_handler = None
     if setup_hinstall:
         try:
@@ -307,8 +279,8 @@ def setup_worker_logger(
             from hinstall_ws_handler import HInstallWebSocketHandler
 
             # Remove all StreamHandlers (stdout) from ilog to prevent debug messages
-            # from being printed to console in production mode (when enable_stdout is False)
-            if not enable_stdout:
+            # from being printed to console in production mode (when devmode is False)
+            if not devmode:
                 for handler in ilog.handlers[:]:
                     if isinstance(handler, logging.StreamHandler):
                         ilog.removeHandler(handler)
@@ -319,9 +291,10 @@ def setup_worker_logger(
 
             # Create and add the handler
             hinstall_handler = HInstallWebSocketHandler(send_to_emit_queue)
-            hinstall_handler.setLevel(logging.INFO)  # Will include PROGRESS (25)
+            hinstall_handler.setLevel(logging.INFO)
             ilog.addHandler(hinstall_handler)
             worker_logger.debug(f"Added WebSocket handler to hinstall logger")
+
         except Exception as e:
             worker_logger.warning(f"Failed to setup hinstall handler: {e}")
             hinstall_handler = None

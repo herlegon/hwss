@@ -57,7 +57,7 @@ class InstallWorker(mp.Process):
         stop_event: Event,
         log_queue: mp.Queue,
         worker_name: str = "install",
-        enable_stdout: bool = False,
+        devmode: bool = False,
     ):
         super().__init__(
             name=worker_name
@@ -68,11 +68,11 @@ class InstallWorker(mp.Process):
         self.result_queue: mp.Queue = result_queue
         self.stop_event: Event = stop_event
         self.log_queue: mp.Queue = log_queue
-        self.enable_stdout: bool = enable_stdout
 
         # Logger will be set up in run() after process starts
         # otherwise, it's not running in the process
-        self.log = None
+        self.log: logging.Logger = None
+        self.devmode: bool = devmode
 
         self.daemon = True
 
@@ -95,7 +95,7 @@ class InstallWorker(mp.Process):
             worker_name=self.worker_name,
             emit_queue=self.result_queue,
             log_queue=self.log_queue,
-            enable_stdout=self.enable_stdout
+            devmode=self.devmode
         )
 
         self.log.debug(purple(f"[{self.pid}] worker process started"))

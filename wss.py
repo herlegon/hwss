@@ -38,8 +38,8 @@ class BackendServer:
         port=49990,
         shutdown_event: asyncio.Event = None,
         shutdown_for_inactivity: bool = True,
-        show_wss_messages: bool = False,
         log_queue: mp.Queue = None,
+        devmode: bool = False,
     ):
         # Server
         self.host = host
@@ -48,12 +48,14 @@ class BackendServer:
         self.clients: dict[str, ClientConnectionHandler] = {}
 
         # Log
-        self.show_wss_messages: bool = show_wss_messages
+        self.devmode: bool = devmode
         self.log_queue: mp.Queue = log_queue
 
-        # Setup server logging (uses queue)
-        self.log: logging.Logger = setup_server_logging(log_queue=log_queue)
-
+        # Setup server logging
+        self.log: logging.Logger = setup_server_logging(
+            log_queue=log_queue,
+            devmode=devmode,
+        )
 
         # Shutdown logic tracking
         self.shutdown_event = shutdown_event
@@ -85,8 +87,8 @@ class BackendServer:
             server_connection,
             client_id=client_id,
             server=self,
-            enable_wss_stdout=self.show_wss_messages,
-            log_queue=self.log_queue
+            log_queue=self.log_queue,
+            devmode=self.devmode,
         )
         self.clients[client_id] = handler
         self.log.info(f"Client registerd: {client_id}")
@@ -112,7 +114,7 @@ class BackendServer:
         """
         # Check if we're shutting down before accepting
         if self._shutting_down:
-            self.log.info("[S] Rejecting connection - server is shutting down")
+            self.log.info("Rejecting connection - server is shutting down")
             await server_connection.close(code=1001, reason="Server shutting down")
             return
 
@@ -141,7 +143,7 @@ class BackendServer:
         # Use gather to send to all clients concurrently
         handlers = list(self.clients.values())
         await asyncio.gather(
-            *[handler.to_client.put(message) for handler in handlers],
+            *[handler.to_client_queue.put(message) for handler in handlers],
             return_exceptions=True
         )
 
@@ -152,7 +154,7 @@ class BackendServer:
 
 
     async def _monitor_shutdown_task(self):
-        self.log.info("[S] Starting shutdown monitor")
+        self.log.info("Starting shutdown monitor")
         while not self._shutting_down:
             try:
                 await asyncio.wait_for(self.shutdown_event.wait(), timeout=2)
@@ -164,7 +166,7 @@ class BackendServer:
             # 1. No client ever connected: shutdown after 10s
             if self.has_ever_connected_timeout and not self.has_ever_connected:
                 if now - self.start_time > self.has_ever_connected_timeout:
-                    self.log.warning("[S] Shutdown monitor: No client connected within 10s")
+                    self.log.warning("Shutdown monitor: No client connected within 10s")
                     if self.shutdown_event:
                         self.shutdown_event.set()
                     return
@@ -179,7 +181,7 @@ class BackendServer:
                     self.last_client_disconnect_time
                     and now - self.last_client_disconnect_time > self.no_new_client_timeout
                 ):
-                     self.log.warning("[S] Shutdown monitor: No clients after previous connection")
+                     self.log.warning("Shutdown monitor: No clients after previous connection")
                      if self.shutdown_event:
                         self.shutdown_event.set()
                      return
@@ -190,7 +192,7 @@ class BackendServer:
                 and client_count > 0
             ):
                 if now - self.last_activity_time > self.inactive_client_timeout:
-                    self.log.warning(f"[S] Shutdown monitor: Inactive client (last activity: {now - self.last_activity_time:.1f}s ago)")
+                    self.log.warning(f"Shutdown monitor: Inactive client (last activity: {now - self.last_activity_time:.1f}s ago)")
                     if self.shutdown_event:
                         self.shutdown_event.set()
                     return
@@ -217,21 +219,21 @@ class BackendServer:
         try:
             await self._shutdown_future
         except asyncio.CancelledError:
-            self.log.info("[S] Server run task cancelled")
+            self.log.info("Server run task cancelled")
             raise
         finally:
-            self.log.info("[S] Server run loop ended")
+            self.log.info("Server run loop ended")
 
 
     async def shutdown(self) -> None:
         """Initiate graceful shutdown sequence
         """
         if self._shutting_down:
-            self.log.info("[S] Shutdown already in progress")
+            self.log.info("Shutdown already in progress")
             return
         self._shutting_down = True
 
-        self.log.info("[S] Shutting down server...")
+        self.log.info("Shutting down server...")
 
         # Signal the run() loop to stop gracefully
         if self._shutdown_future and not self._shutdown_future.done():
@@ -239,7 +241,7 @@ class BackendServer:
 
         # Close all client connections
         if self.clients:
-            self.log.info(f"[S] Notifying {len(self.clients)} client(s) of shutdown...")
+            self.log.info(f"Notifying {len(self.clients)} client(s) of shutdown...")
             handlers = list(self.clients.values())
 
             # Stop all client handlers (they will notify clients and stop workers)
@@ -252,16 +254,16 @@ class BackendServer:
                     timeout=20
                 )
             except asyncio.TimeoutError:
-                self.log.warning("[S] Timeout while closing client handlers")
+                self.log.warning("Timeout while closing client handlers")
 
             self.clients.clear()
-            self.log.info("[S] All clients disconnected")
+            self.log.info("All clients disconnected")
 
         # Stop accepting new connections
         if self._server:
             self._server.close()
             await self._server.wait_closed()
-        self.log.info("[S] Server shutdown")
+        self.log.info("Server shutdown")
 
         # Terminate remaining child processes if any
         active_children = mp.active_children()
@@ -288,7 +290,7 @@ class BackendServer:
                 t.cancel()
             await asyncio.gather(*pending, return_exceptions=True)
 
-        self.log.info("[S] Shutdown complete")
+        self.log.info("Shutdown complete")
 
 
 
@@ -341,38 +343,35 @@ async def main():
     parser.add_argument('--host', default="127.0.0.1")
     parser.add_argument('--port', type=int, default=49990)
     parser.add_argument('--keep-alive', action='store_true')
-    parser.add_argument('--mode', choices=['dev', 'prod'], default='prod')
+    parser.add_argument('--devmode', action='store_true')
     parser.add_argument('--log-file', type=str, default=None)
-    parser.add_argument('--no-stdout', action='store_true', help='Disable stdout logging (logs to file only)')
-    parser.add_argument('--show-wss-messages', action='store_true', help='Print WebSocket messages to stdout (dev only)')
     args = parser.parse_args()
 
-    # Determine log file path (same for server and all clients in production)
     log_file = args.log_file
-    if log_file is None and args.mode == 'prod':
-        log_file = 'server.log'  # Default production log file
+    devmode: bool = args.devmode
+    host, port = args.host, args.port
 
-    elif log_file is None and not (args.mode == 'dev' and not args.no_stdout):
-        log_file = 'server_dev.log'  # Dev mode with no stdout
+    # Log file
+    if devmode:
+        log_file = ""
+
+    elif log_file is None:
+        log_file = 'server.log'  # Default production log file
 
     # Create centralized logging queue and listener
     log_queue = mp.Queue(-1)
     queue_listener = setup_queue_listener(
         log_queue=log_queue,
         log_file=log_file,
-        enable_stdout=not args.no_stdout,
-        mode=args.mode,
+        devmode=devmode,
     )
     queue_listener.start()
 
     # Setup module-level logger with queue handler
     main_log.handlers.clear()
     main_log.addHandler(logging.handlers.QueueHandler(log_queue))
-    main_log.setLevel(logging.DEBUG if args.mode == 'dev' else logging.INFO)
+    main_log.setLevel(logging.DEBUG if devmode else logging.INFO)
 
-
-    main_log.info("[S] Server starting")
-    host, port = args.host, args.port
 
     shutdown_event = asyncio.Event()
     server = BackendServer(
@@ -380,8 +379,8 @@ async def main():
         port=port,
         shutdown_event=shutdown_event,
         shutdown_for_inactivity=not args.keep_alive,
-        show_wss_messages=args.show_wss_messages,
         log_queue=log_queue,
+        devmode=devmode
     )
 
     loop: asyncio.AbstractEventLoop | None = None
@@ -396,7 +395,7 @@ async def main():
     try:
         # Wait for shutdown signal
         await shutdown_event.wait()
-        main_log.info("[S] Shutdown event triggered, starting server shutdown...")
+        main_log.info("Shutdown event triggered, starting server shutdown...")
 
         # Perform graceful shutdown
         await server.shutdown()
@@ -411,7 +410,7 @@ async def main():
                 try:
                     await server_task
                 except asyncio.CancelledError:
-                    main_log.info("[S] Server task cancelled successfully")
+                    main_log.info("Server task cancelled successfully")
 
     except Exception as e:
         main_log.error(f"Error during shutdown: {str(e)}", exc_info=True)
@@ -420,9 +419,9 @@ async def main():
             try:
                 await server_task
             except asyncio.CancelledError:
-                main_log.info("[S] Server task cancelled due to error")
+                main_log.info("Server task cancelled due to error")
 
-    main_log.info("[S] Main exiting")
+    main_log.info("Main exiting")
 
     # Stop the queue listener
     queue_listener.stop()
@@ -437,7 +436,7 @@ if __name__ == "__main__":
         main_log.critical(f"Fatal error: {e}", exc_info=True)
         sys.exit(1)
 
-    main_log.info("[S] Process exit")
+    main_log.info("Process exit")
 
 
 
