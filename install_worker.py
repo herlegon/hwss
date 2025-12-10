@@ -91,13 +91,12 @@ class InstallWorker(mp.Process):
         signal.signal(signal.SIGINT, signal.SIG_IGN)
 
         # Setup worker logger (must be done inside run(), after process starts)
-        self.log = setup_worker_logger(
+        self.log, self.hinstall_ws_handler = setup_worker_logger(
             worker_name=self.worker_name,
             emit_queue=self.result_queue,
             log_queue=self.log_queue,
             enable_stdout=self.enable_stdout
         )
-
 
         self.log.debug(purple(f"[{self.pid}] worker process started"))
 
@@ -293,26 +292,28 @@ class InstallWorker(mp.Process):
         cpu_count = mp.cpu_count()
         cpu_count = max(cpu_count - 1, int(cpu_count * 4 / 5))
 
+        # List all packages that are required before installing the AI computation resources
         initial_pkgs = self.py_packages.get_initial()
-
         to_install_pkgs = initial_pkgs.get_not_installed()
         if self.keep_up_to_date:
             self.log.debug(f"TODO: keep_up_to_date")
 
+        # If all packages already installed, no need to restart
         if not to_install_pkgs:
             self.log.debug(f"All packages installed")
             return False
 
-        # Note: All ilog messages are automatically forwarded to WebSocket client
-        # via the HInstallWebSocketHandler added in run()
-
+        # Use multithreading to update the packages info that are not installed
+        # Connection to the internet for that
         start_time = time.time()
         with ThreadPoolExecutor(
             max_workers=min(cpu_count, len(to_install_pkgs))
         ) as executor:
             executor.map(lambda pkg: pkg.update_info(), to_install_pkgs)
         elapsed = time.time() - start_time
+        # TODO: what if fails to connect?
 
+        # For debug
         for pkg in to_install_pkgs:
             pkg: PyPackage
             self.log.info(f"Installing: {pkg.name} {pkg.version}")
@@ -327,6 +328,9 @@ class InstallWorker(mp.Process):
             self.log.debug(message)
         self.log.debug(f"updated package list in {elapsed:.02f}s")
 
+        # Download wheels
+        start_time = time.time()
+        failed_packages: list[str] = []
         for pkg in to_install_pkgs:
             # Cache packages with size > 80MB
             if pkg.size > 80000 and self.cache:
@@ -337,21 +341,43 @@ class InstallWorker(mp.Process):
                 downloaded = pkg.download_wheel(force=False, use_pip=False)
                 elapsed = time.time() - start_time
                 if downloaded:
-                    self.log.info(f"{pkg.name} downloaded in {elapsed:.02f}s")
+                    self.log.debug(f"{pkg.name} downloaded in {elapsed:.02f}s")
                 else:
-                    self.log.error(f"{pkg.name} failed to download")
+                    self.log.debug(f"{pkg.name} failed to download")
 
+        elapsed = time.time() - start_time
+        if failed_packages:
+            self.log.critical(f"Failed to download package(s): {', '.join(failed_packages)}")
+            return True
+        else:
+            self.log.info(f"Packages downloaded in {elapsed:.02f}s")
+
+        # Install wheels
+        start_time = time.time()
+        failed_packages: list[str] = []
+        for pkg in to_install_pkgs:
             self.log.debug(f"Install {pkg.name} (reinstall={self.reinstall})")
             pkg.install(reinstall=self.reinstall)
 
-        to_install_pkgs.update_installed_versions()
-        for pkg in to_install_pkgs:
-            if not pkg.installed:
-                self.log.client_error(f"Failed to install {pkg.name}. Retry.")
-                success = pkg.install(recover=True)
+        elapsed = time.time() - start_time
+        if failed_packages:
+            self.log.error(f"Failed to install package(s): {', '.join(failed_packages)}")
+            time.sleep(1.)
+        else:
+            self.log.info(f"Packages installed in {elapsed:.02f}s")
 
-        # Restart required
+        # Retry packages
+        if failed_packages:
+            failed_packages: list[str] = []
+            self.log.info(f"Retry installing missing packages.")
+            to_install_pkgs.update_installed_versions()
+            for pkg in to_install_pkgs:
+                pkg.install(recover=True)
+                if not pkg.installed:
+                    self.log.critical(f"Failed to install package {pkg.name}")
+
         return True
+
 
 
 
@@ -363,7 +389,7 @@ class InstallWorker(mp.Process):
                 keep_up_to_date=self.keep_up_to_date
             )
 
-        pkgs = self.py_packages.get_delayed()
+        to_install_pkgs = self.py_packages.get_delayed()
 
         from hsys import is_feature_supported
 
@@ -379,26 +405,26 @@ class InstallWorker(mp.Process):
 
         start_time = time.time()
 
-        for pkg in pkgs.get_by_execution_provider('cuda'):
+        for pkg in to_install_pkgs.get_by_execution_provider('cuda'):
             pkg.skip = not cuda
             pkg.supported = cuda
 
-        for pkg in pkgs.get_by_execution_provider('rocm'):
+        for pkg in to_install_pkgs.get_by_execution_provider('rocm'):
             pkg.skip = not rocm
             pkg.supported = rocm
 
-        for pkg in pkgs.get_by_execution_provider('directml'):
+        for pkg in to_install_pkgs.get_by_execution_provider('directml'):
             pkg.skip = not directml
             pkg.supported = directml
 
         cpu_fallback = all([x is False for x in (cuda, tensorrt, rocm)])
-        for pkg in pkgs.get_by_execution_provider('cpu'):
+        for pkg in to_install_pkgs.get_by_execution_provider('cpu'):
             pkg.skip = not cpu_fallback
             pkg.supported = cpu_fallback
 
 
         self.log.debug("supported packages")
-        supported_pkgs = pkgs.get_delayed(supported_only=True)
+        supported_pkgs = to_install_pkgs.get_delayed(supported_only=True)
         for pkg in supported_pkgs:
             self.log.debug(lightcyan(pkg.pretty_name))
             self.log.debug(f"Package details: {pkg}")
@@ -410,6 +436,7 @@ class InstallWorker(mp.Process):
         ) as executor:
             executor.map(lambda pkg: pkg.update_info(), supported_pkgs)
         elapsed = time.time() - start_time
+        self.log.info(f"Fetch package versions in {elapsed:.02f}s")
 
         for pkg in supported_pkgs:
             pkg: PyPackage
@@ -420,38 +447,52 @@ class InstallWorker(mp.Process):
             self.log.debug(f"    wheel url: {pkg.wheel_url}")
             self.log.debug(f"    size: {pkg.size // 1024}kB")
             self.log.debug(f"    do cache: {pkg.do_cache}")
-        self.log.info(f"updated in {elapsed:.02f}s")
-
 
         # print("Packages to install: ", lightcyan(", ".join((pkg.name for pkg in to_install_pkgs))))
-        pkgs = [pkg for pkg in supported_pkgs if not pkg.installed]
-        if len(pkgs) == 0:
+        to_install_pkgs = [pkg for pkg in supported_pkgs if not pkg.installed]
+        if len(to_install_pkgs) == 0:
             return False
 
         # Download
-        for pkg in pkgs:
+        start_time = time.time()
+        failed_packages: list[str] = []
+        for pkg in to_install_pkgs:
             if pkg.installed or not pkg.do_cache:
                 continue
 
-            start_time = time.time()
-            downloaded = pkg.download_wheel(force=False, use_pip=False)
-            if downloaded:
-                self.log.info(f"{pkg.name} downloaded in {elapsed:.02f}s")
-            else:
-                self.log.error(f"{pkg.name} failed to download")
+            if not pkg.download_wheel(force=False, use_pip=False):
+                failed_packages.append(pkg.name)
 
-            elapsed = time.time() - start_time
-            self.log.info(f"{pkg.name} downloaded in {elapsed:.02f}s")
-            # print(lightcyan("-" * 80))
+        elapsed = time.time() - start_time
+        if failed_packages:
+            self.log.error(f"Failed to download package(s): {', '.join(failed_packages)}")
+            return True
 
-        # install
-        for pkg in pkgs:
-            pkg.install(reinstall=False)
+        else:
+            self.log.info(f"Packages downloaded in {elapsed:.02f}s")
 
+        # Install packages
+        start_time = time.time()
+        failed_packages: list[str] = []
+        for pkg in to_install_pkgs:
+            if not pkg.install(reinstall=False):
+                failed_packages.append(pkg.name)
 
-        pkgs.update_installed_versions()
-        for pkg in supported_pkgs:
-            if not pkg.installed:
-                self.log.critical(f"{pkg.name} not installed")
+        elapsed = time.time() - start_time
+        if failed_packages:
+            self.log.error(f"Failed to install package(s): {', '.join(failed_packages)}")
+            time.sleep(1.)
+        else:
+            self.log.info(f"Packages installed in {elapsed:.02f}s")
+
+        # Retry packages
+        if failed_packages:
+            failed_packages: list[str] = []
+            self.log.info(f"Retry installing missing packages.")
+            to_install_pkgs.update_installed_versions()
+            for pkg in supported_pkgs:
                 pkg.install(recover=True)
+                if not pkg.installed:
+                    self.log.critical(f"Failed to install package(s): {', '.join(failed_packages)}")
+
         return True

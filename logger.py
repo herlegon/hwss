@@ -238,18 +238,21 @@ def setup_worker_logger(
     emit_queue: mp.Queue,
     log_queue: mp.Queue,
     enable_stdout: bool = False,
-) -> logging.Logger:
+    setup_hinstall: bool = True,
+) -> tuple[logging.Logger, logging.Handler | None]:
     """
     Setup logging for a worker process.
     Called inside each worker process after it starts.
 
     Args:
         worker_name: Name of the worker
+        emit_queue: Multiprocessing queue for WebSocket messages
         log_queue: Multiprocessing queue for centralized logging
         enable_stdout: Whether to also print to stdout
+        setup_hinstall: Whether to setup hinstall logger handler
 
     Returns:
-        Worker logger instance
+        Tuple of (worker logger instance, hinstall handler or None)
     """
 
     logger_name = f'worker.{worker_name}'
@@ -296,5 +299,25 @@ def setup_worker_logger(
     import types
     worker_logger.progress = types.MethodType(progress, worker_logger)
 
-    return worker_logger
+    # Setup hinstall logger to forward messages to WebSocket client
+    hinstall_handler = None
+    if setup_hinstall:
+        try:
+            from hinstall.logger import ilog
+            from hinstall_ws_handler import HInstallWebSocketHandler
+            
+            # Create a callback that sends to emit_queue
+            def send_to_emit_queue(event_msg):
+                emit_queue.put(event_msg)
+            
+            # Create and add the handler
+            hinstall_handler = HInstallWebSocketHandler(send_to_emit_queue)
+            hinstall_handler.setLevel(logging.INFO)  # Will include PROGRESS (25)
+            ilog.addHandler(hinstall_handler)
+            worker_logger.debug(f"Added WebSocket handler to hinstall logger")
+        except Exception as e:
+            worker_logger.warning(f"Failed to setup hinstall handler: {e}")
+            hinstall_handler = None
+
+    return worker_logger, hinstall_handler
 

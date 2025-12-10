@@ -42,6 +42,7 @@ class HInstallWebSocketHandler(logging.Handler):
         self.send_callback = send_callback
         self.current_package: Optional[str] = None
         self.STATUS_LEVEL = 15  # Same as in hinstall.logger
+        self.PROGRESS_LEVEL = 25  # Same as in hinstall.logger
     
     def emit(self, record: logging.LogRecord):
         """
@@ -51,8 +52,12 @@ class HInstallWebSocketHandler(logging.Handler):
             record: Log record to process
         """
         try:
+            # Handle PROGRESS level messages
+            if record.levelno == self.PROGRESS_LEVEL:
+                self._handle_progress(record)
+            
             # Handle STATUS level messages (progress updates)
-            if record.levelno == self.STATUS_LEVEL:
+            elif record.levelno == self.STATUS_LEVEL:
                 self._handle_status(record)
             
             # Handle regular log messages (INFO and above)
@@ -76,6 +81,29 @@ class HInstallWebSocketHandler(logging.Handler):
             type='msg',
             payload={'type': level_name, 'text': message}
         ))
+    
+    def _handle_progress(self, record: logging.LogRecord):
+        """
+        Handle PROGRESS level messages and forward as EventMessage type='progress'.
+        
+        Args:
+            record: Log record to process
+        """
+        # Extract progress_data from the record (attached by ilog.progress())
+        if hasattr(record, 'progress_data'):
+            progress_data = record.progress_data
+            # Convert to dict if it's a dataclass
+            from dataclasses import asdict, is_dataclass
+            if is_dataclass(progress_data):
+                progress_dict = asdict(progress_data)
+            else:
+                progress_dict = progress_data
+            
+            self.send_callback(EventMessage(
+                type='progress',
+                payload=progress_dict
+            ))
+
     
     def _handle_status(self, record: logging.LogRecord):
         """

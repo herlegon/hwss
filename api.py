@@ -104,7 +104,8 @@ class InstallTask:
 class InstallProgress:
     task_id: InstallTaskId = 'install'
     package_name: str = ""
-    type: Literal['progress', 'indet'] = 'indet'
+    status: str = ""
+    type: Literal['progress', 'indet'] = 'progress'
     progress: float = 0.
 
 
