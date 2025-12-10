@@ -16,6 +16,7 @@
     "python.analysis.extraPaths": [
         "../hytils",
         "../hinstall",
+        "../hsys",
     ],
     "python.analysis.typeCheckingMode": "basic",
     "python.analysis.diagnosticSeverityOverrides": {

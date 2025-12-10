@@ -3,6 +3,7 @@ import signal
 import sys
 import logging
 import logging.handlers
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__))))
 
 from logger import setup_server_logging, setup_queue_listener
 import logging
@@ -19,7 +20,6 @@ import asyncio
 asyncio_logger = logging.getLogger("asyncio")
 asyncio_logger.setLevel(logging.WARNING)
 
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__))))
 
 from client_connection import ClientConnectionHandler
 from hytils import red, yellow

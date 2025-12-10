@@ -7,7 +7,6 @@ from typing import Any, Optional
 RequestType = Literal[
     'heartbeat',
     'identify',
-    'restart',
     'shutdown',
     'telemetry',
 
@@ -82,6 +81,7 @@ class WssIdentity:
     clients: int
 
 
+
 @dataclass(slots=True)
 class ParseTask:
     task_id: InstallTaskId = 'parse'
@@ -94,10 +94,21 @@ class ParseTask:
     local_rehost: str = ""
 
 
+
 @dataclass(slots=True)
 class InstallTask:
     task_id: InstallTaskId = 'install'
     stage: int = -1
+
+
+
+@dataclass(slots=True)
+class InstallTaskResult:
+    task_id: InstallTaskId = 'install'
+    stage: int = -1
+    status: Literal['parsed', 'installed', 'failed', 'error'] = ''
+    restart: bool = False
+
 
 
 @dataclass(slots=True)
@@ -107,7 +118,6 @@ class InstallProgress:
     status: str = ""
     type: Literal['progress', 'indet'] = 'progress'
     progress: float = 0.
-
 
 
 

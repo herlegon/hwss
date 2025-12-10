@@ -10,7 +10,7 @@ import sys
 import time
 from hytils import lightcyan, lightgreen, purple, red, yellow
 from logger import setup_worker_logger, slog
-from api import InstallProgress, WorkerResponse
+from api import InstallProgress, InstallTaskResult, WorkerResponse
 import multiprocessing as mp
 from multiprocessing.synchronize import Event
 from typing import Literal
@@ -125,10 +125,14 @@ class InstallWorker(mp.Process):
                         self.handle_install_py_packages(install_task)
 
                     else:
-                        self.send({
-                            'result': "error",
-                            'msg': f"Not supported stage no: {stage_no}"
-                        })
+                        self.send(
+                            InstallTaskResult(
+                                task_id=task_id,
+                                stage=-1,
+                                status='error',
+                                restart=False,
+                            )
+                        )
 
             except queue.Empty:
                 continue
@@ -164,8 +168,6 @@ class InstallWorker(mp.Process):
             self.result_queue.put(
                 ResponseMessage(type='install', payload=data)
             )
-
-
 
 
 
@@ -243,41 +245,41 @@ class InstallWorker(mp.Process):
         else:
             self.log.error(lightgreen("No packages to install"))
 
-        self.send({
-            'task_id': task.task_id,
-            'stage': task.stage,
-            'status': 'installed',
-            'restart': False
-        })
-
-        # Todo: verify
+        self.send(
+            InstallTaskResult(
+                task_id=task.task_id,
+                stage=task.stage,
+                status='installed' if installed else 'failed',
+                restart=False,
+            )
+        )
 
 
     def handle_install_py_packages(self, task: InstallTask) -> None:
-        status = 'failed'
-        restart_required = False
+        success = False
+        restart = False
         try:
             if task.stage == 1:
-                restart_required = self.handle_install_py_packages_1st_stage()
+                success, restart = self.handle_install_py_packages_1st_stage()
 
             elif task.stage == 2:
-                restart_required = self.handle_install_py_packages_2nd_stage()
-
-            status = 'installed'
+                success, restart = self.handle_install_py_packages_2nd_stage()
 
         except Exception as e:
             self.log.critical(f"Exception: {str(e)}")
-            return
 
-        self.send({
-            'task_id': task.task_id,
-            'stage': task.stage,
-            'status': status,
-            'restart': restart_required
-        })
+        self.send(
+            InstallTaskResult(
+                task_id=task.task_id,
+                stage=task.stage,
+                status='installed' if success else 'failed',
+                restart=restart,
+            )
+        )
 
 
-    def handle_install_py_packages_1st_stage(self) -> bool:
+    def handle_install_py_packages_1st_stage(self) -> tuple[bool, bool]:
+        # returns success & restart required
         self.py_packages = PyPackages(
             self.packages_cfg,
             sys.platform,
@@ -293,12 +295,12 @@ class InstallWorker(mp.Process):
         # If all packages already installed, no need to restart
         if not to_install_pkgs:
             self.log.debug(f"All packages installed")
-            return False
+            return True, False
 
-        return self._process_packages(to_install_pkgs)
+        return self._process_python_packages(to_install_pkgs, stage_no=1)
 
 
-    def handle_install_py_packages_2nd_stage(self) -> bool:
+    def handle_install_py_packages_2nd_stage(self) -> tuple[bool, bool]:
         if self.py_packages is None:
             self.py_packages = PyPackages(
                 self.packages_cfg,
@@ -344,15 +346,15 @@ class InstallWorker(mp.Process):
             self.log.debug(lightcyan(pkg.pretty_name))
             self.log.debug(f"Package details: {pkg}")
 
-        return self._process_packages(supported_pkgs)
+        return self._process_python_packages(supported_pkgs, stage_no=2)
 
 
-    def _process_packages(self, packages: list[PyPackage]) -> bool:
+    def _process_python_packages(self, packages: list[PyPackage], stage_no: int) -> tuple[bool, bool]:
         """
         Common logic to update info, download, and install a list of packages.
         """
         if not packages:
-            return False
+            return True, False
 
         # Use multithreading to update the packages info
         start_time = time.time()
@@ -386,7 +388,7 @@ class InstallWorker(mp.Process):
         # Filter packages that need installation
         to_install_pkgs = [pkg for pkg in packages if not pkg.installed]
         if not to_install_pkgs:
-            return False
+            return True, False
 
         # Download wheels
         dl_start_time = time.time()
@@ -400,7 +402,7 @@ class InstallWorker(mp.Process):
                 start_time = time.time()
                 downloaded = pkg.download_wheel(
                     force=False,
-                    use_pip=False,
+                    use_pip=True if stage_no == 1 else False,
                     use_local_rehost=self.use_local_rehost
                 )
 
@@ -414,7 +416,7 @@ class InstallWorker(mp.Process):
         elapsed = time.time() - dl_start_time
         if failed_packages:
             self.log.critical(f"Failed to download package(s): {', '.join(failed_packages)}")
-            return True
+            return False, True
         else:
             self.log.info(f"Packages downloaded in {elapsed:.02f}s")
 
@@ -459,11 +461,12 @@ class InstallWorker(mp.Process):
                     failed_packages.append(pkg.pretty_name)
                     self.log.critical(f"Failed to install package {pkg.name}")
 
+        success: bool = not failed_packages
         self.log.progress(InstallProgress(
             package_name="",
             type='indet',
-            status='success' if not failed_packages else 'failed',
+            status='success' if success else 'failed',
             progress=100,
         ))
 
-        return True
+        return success, True
