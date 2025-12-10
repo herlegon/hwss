@@ -121,11 +121,8 @@ class InstallWorker(mp.Process):
                     if stage_no == 0:
                         self.handle_install_ext_packages(install_task)
 
-                    if stage_no == 1:
-                        self.handle_install_1st_stage(install_task)
-
-                    elif stage_no == 2:
-                        self.handle_install_2nd_stage(install_task)
+                    elif stage_no in (1, 2):
+                        self.handle_install_py_packages(install_task)
 
                     else:
                         self.send({
@@ -222,7 +219,6 @@ class InstallWorker(mp.Process):
         })
 
 
-
     def handle_install_ext_packages(self, task: InstallTask) -> None:
         # Install the external packages if not local
         if self.local_backend:
@@ -257,13 +253,16 @@ class InstallWorker(mp.Process):
         # Todo: verify
 
 
-    def handle_install_1st_stage(self, task: InstallTask) -> None:
-        # Install the packages of the 1st stage: mandatory to select
-        #   the correct ones of the 2nd stage
+    def handle_install_py_packages(self, task: InstallTask) -> None:
         status = 'failed'
         restart_required = False
         try:
-            restart_required = self.handle_install_py_packages_1st_stage()
+            if task.stage == 1:
+                restart_required = self.handle_install_py_packages_1st_stage()
+
+            elif task.stage == 2:
+                restart_required = self.handle_install_py_packages_2nd_stage()
+
             status = 'installed'
 
         except Exception as e:
@@ -276,7 +275,6 @@ class InstallWorker(mp.Process):
             'status': status,
             'restart': restart_required
         })
-
 
 
     def handle_install_py_packages_1st_stage(self) -> bool:
@@ -408,9 +406,7 @@ class InstallWorker(mp.Process):
         return True
 
 
-
-
-    def handle_install_2nd_stage(self) -> bool:
+    def handle_install_py_packages_2nd_stage(self) -> bool:
         if self.py_packages is None:
             self.py_packages = PyPackages(
                 self.packages_cfg,
