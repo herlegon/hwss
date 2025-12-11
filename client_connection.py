@@ -22,7 +22,9 @@ from websockets import (
 import logger
 from logger import setup_client_logger
 from typing import TYPE_CHECKING
-
+from hinstall import (
+    get_pypackage_list,
+)
 
 if TYPE_CHECKING:
     from wss import BackendServer
@@ -158,6 +160,16 @@ class ClientConnectionHandler:
             if self.server:
                 # Schedule shutdown on the event loop to avoid blocking current handler
                 asyncio.create_task(self.server.shutdown())
+
+
+        elif request_type == 'package_versions':
+            get_pypackage_list()
+            pass
+
+
+        elif request_type == 'sys_info':
+            self.log.warning('todo: sysinfo')
+            pass
 
 
         # Setup/Install Messages

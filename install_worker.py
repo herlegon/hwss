@@ -31,6 +31,8 @@ try:
         download_install_ext_packages,
         g_backend_dirs,
         parse_config_,
+        clean_invalid_distributions,
+        get_py_package_versions,
     )
 except Exception as e:
     print(red(f"Failed to import hinstall package: {str(e)}"))
@@ -219,6 +221,11 @@ class InstallWorker(mp.Process):
             'status': "parsed"
         })
 
+        self.log.info(
+            f"Installed python packages\n   "
+            + f"\n   ".join(get_py_package_versions())
+        )
+
 
     def handle_install_ext_packages(self, task: InstallTask) -> None:
         # Install the external packages if not local
@@ -257,6 +264,11 @@ class InstallWorker(mp.Process):
     def handle_install_py_packages(self, task: InstallTask) -> None:
         success = False
         restart = False
+        try:
+            clean_invalid_distributions()
+        except Exception as e:
+            self.log.error(f"Failed to remove invalid distributions. {str(e)}")
+
         try:
             if task.stage == 1:
                 success, restart = self.handle_install_py_packages_1st_stage()

@@ -1,9 +1,9 @@
 #!/bin/bash
 
-/home/adg/.local/share/herlegon/python/bin/python -m pip uninstall \
-    psutil \
-    nvidia-ml-py \
-    -y
+# /home/adg/.local/share/herlegon/python/bin/python -m pip uninstall \
+#     psutil \
+#     nvidia-ml-py \
+#     -y
 
 
     # opencv-python \
