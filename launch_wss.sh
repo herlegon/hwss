@@ -3,10 +3,13 @@
 /home/adg/.local/share/herlegon/python/bin/python -m pip uninstall \
     psutil \
     nvidia-ml-py \
-    opencv-python \
-    numpy \
-    pillow \
     -y
+
+
+    # opencv-python \
+    # numpy \
+    # pillow \
+    #
 
 rm -rf /opt/herlegon/cache
 

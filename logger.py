@@ -50,8 +50,8 @@ class WsLoggingHandler(logging.Handler):
                 # Regular log message
                 msg_type = self._levelname_to_message_type(record.levelname)
                 event_msg = EventMessage(
-                    type='msg',
-                    payload={'type': msg_type, 'text': self.format(record)}
+                    type='log',
+                    payload={'level': record.levelno, 'text': self.format(record)}
                 )
 
             # Put message in the client's queue (non-blocking)
@@ -296,10 +296,10 @@ def setup_worker_logger(
             hinstall_handler = HInstallWebSocketHandler(send_to_emit_queue)
             hinstall_handler.setLevel(logging.INFO)
             ilog.addHandler(hinstall_handler)
-            
+
             # Also add the queue handler to ilog so messages go to the server log file
             ilog.addHandler(queue_handler)
-            
+
             worker_logger.debug(f"Added WebSocket handler to hinstall logger")
 
         except Exception as e:

@@ -293,7 +293,7 @@ class InstallWorker(mp.Process):
 
         # If all packages already installed, no need to restart
         if not to_install_pkgs:
-            self.log.debug(f"Stage 1: all packages installed")
+            self.log.info(f"Stage 1: all packages already installed.")
             return True, False
 
         return self._process_python_packages(to_install_pkgs, stage_no=1)
@@ -367,7 +367,7 @@ class InstallWorker(mp.Process):
         self.log.info(f"Fetch package versions in {elapsed:.02f}s")
 
         # For debug
-        self.log.info(f"Packages to process: {', '.join([p.name for p in packages])}")
+        self.log.debug(f"Packages to process: {', '.join([p.name for p in packages])}")
         for pkg in packages:
             message: list[str] = "\n".join([
                 f"{lightcyan(pkg.name)}:",
@@ -387,7 +387,9 @@ class InstallWorker(mp.Process):
         # Filter packages that need installation
         to_install_pkgs = [pkg for pkg in packages if not pkg.installed]
         if not to_install_pkgs:
+            self.log.info(f"Stage {stage_no}: all packages already installed")
             return True, False
+        self.log.info(f"Packages to install: {', '.join([p.name for p in to_install_pkgs])}")
 
         # Download wheels
         dl_start_time = time.time()

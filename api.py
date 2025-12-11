@@ -29,7 +29,8 @@ ResponseType = Literal[
 
 
 EventType = Literal[
-    'msg',
+    'log',
+    # 'msg',
     'telemetry',
     'status',
     'progress',
