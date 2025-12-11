@@ -221,11 +221,6 @@ class InstallWorker(mp.Process):
             'status': "parsed"
         })
 
-        self.log.info(
-            f"Installed python packages\n   "
-            + f"\n   ".join(get_py_package_versions())
-        )
-
 
     def handle_install_ext_packages(self, task: InstallTask) -> None:
         # Install the external packages if not local

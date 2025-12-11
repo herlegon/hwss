@@ -9,6 +9,9 @@ RequestType = Literal[
     'identify',
     'shutdown',
     'telemetry',
+    'sysinfo',
+    'syscap',
+    'versions',
 
     # Applications
     'install',
@@ -20,6 +23,8 @@ ResponseType = Literal[
     'pong',
     'identity',
     'shutdown',
+    'syscap',
+    'sysinfo',
 
     # Applications
     'install',
@@ -68,7 +73,6 @@ MessageType = Literal[
 
 
 
-
 @dataclass(slots=True)
 class EventMessage:
     type: EventType
@@ -81,6 +85,15 @@ class WssIdentity:
     app: str
     clients: int
 
+
+@dataclass(slots=True)
+class PackageVersions:
+    packages: dict[str, str]
+
+
+@dataclass(slots=True)
+class SysCap:
+    syscap: dict[str, str]
 
 
 @dataclass(slots=True)
@@ -95,12 +108,10 @@ class ParseTask:
     local_rehost: str = ""
 
 
-
 @dataclass(slots=True)
 class InstallTask:
     task_id: InstallTaskId = 'install'
     stage: int = -1
-
 
 
 @dataclass(slots=True)
@@ -109,7 +120,6 @@ class InstallTaskResult:
     stage: int = -1
     status: Literal['parsed', 'installed', 'failed', 'error'] = ''
     restart: bool = False
-
 
 
 @dataclass(slots=True)
@@ -121,7 +131,6 @@ class InstallProgress:
     progress: float = 0.
 
 
-
 def serialize(msg: RequestMessage) -> str:
     """Serialize object to JSON string"""
     if hasattr(msg, '__dataclass_fields__'):
@@ -131,7 +140,6 @@ def serialize(msg: RequestMessage) -> str:
         return json.dumps(vars(msg))
 
     return json.dumps(msg)
-
 
 
 def deserialize(msg: ResponseMessage | EventMessage) -> dict | None:

@@ -9,7 +9,15 @@ from pprint import pprint
 import queue
 import sys
 import websockets
-from api import RequestMessage, ResponseMessage, WssIdentity, deserialize, serialize
+from api import (
+    RequestMessage,
+    ResponseMessage,
+    WssIdentity,
+    deserialize,
+    serialize,
+    PackageVersions,
+    SysCap,
+)
 from install_worker import InstallWorker
 from hytils import lightblue, lightcyan, purple, red, yellow
 from websockets import (
@@ -23,7 +31,7 @@ import logger
 from logger import setup_client_logger
 from typing import TYPE_CHECKING
 from hinstall import (
-    get_pypackage_list,
+    get_py_package_versions,
 )
 
 if TYPE_CHECKING:
@@ -163,13 +171,25 @@ class ClientConnectionHandler:
 
 
         elif request_type == 'package_versions':
-            get_pypackage_list()
-            pass
+            # Currently python packages only
+            # TODO: add third parties
+            response = ResponseMessage(
+                type='versions',
+                payload=PackageVersions(packages=get_py_package_versions())
+            )
+            await self.to_client_queue.put(response)
 
 
-        elif request_type == 'sys_info':
-            self.log.warning('todo: sysinfo')
-            pass
+        elif request_type == 'syscap':
+            syscap: dict[str, bool] = {}
+            try:
+                from hsys import is_feature_supported, feature_list
+                syscap = {f: is_feature_supported(f) for f in feature_list}
+                response = ResponseMessage(type='syscap', payload=SysCap(syscap))
+                await self.to_client_queue.put(response)
+
+            except Exception as e:
+                self.log.error(f"Failed to get system capabilities: {str(e)}")
 
 
         # Setup/Install Messages
