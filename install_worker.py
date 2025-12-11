@@ -81,7 +81,7 @@ class InstallWorker(mp.Process):
         self.use_local_rehost: bool = True
         self.local_rehost: str = ""
         self.keep_up_to_date: bool = False
-        self.packages_cfg : dict[str, str] = {}
+        self.app_packages : dict[str, str] = {}
         self.py_packages: PyPackages = None
 
 
@@ -188,15 +188,14 @@ class InstallWorker(mp.Process):
 
 
     def handle_parse_cfg(self, task: ParseTask) -> None:
-        toml_cfg = json.loads(task.cfg)
-
         self.local_backend: bool = task.local_backend
         self.reinstall: bool = task.reinstall
         self.use_local_rehost: bool = task.use_local_rehost
         self.cache = task.cache
 
         self.log.info(f"Backend python: {str(g_backend_dirs.python_exe)}")
-        self.packages_cfg = parse_config_(toml_cfg)
+        toml_cfg = json.loads(task.cfg)
+        self.app_packages = parse_config_(toml_cfg)
 
         msg: str = "\n  ".join([
             f"Install settings:"
@@ -227,7 +226,7 @@ class InstallWorker(mp.Process):
             return
 
         # All packages except python
-        ext_packages = ExtPackages(self.packages_cfg, sys.platform)
+        ext_packages = ExtPackages(self.app_packages, sys.platform)
         packages_to_install = ext_packages.get_all_except('python')
 
         # Install external packages
@@ -281,7 +280,7 @@ class InstallWorker(mp.Process):
     def handle_install_py_packages_1st_stage(self) -> tuple[bool, bool]:
         # returns success & restart required
         self.py_packages = PyPackages(
-            self.packages_cfg,
+            self.app_packages,
             sys.platform,
             keep_up_to_date=self.keep_up_to_date
         )
@@ -294,7 +293,7 @@ class InstallWorker(mp.Process):
 
         # If all packages already installed, no need to restart
         if not to_install_pkgs:
-            self.log.debug(f"All packages installed")
+            self.log.debug(f"Stage 1: all packages installed")
             return True, False
 
         return self._process_python_packages(to_install_pkgs, stage_no=1)
@@ -303,7 +302,7 @@ class InstallWorker(mp.Process):
     def handle_install_py_packages_2nd_stage(self) -> tuple[bool, bool]:
         if self.py_packages is None:
             self.py_packages = PyPackages(
-                self.packages_cfg,
+                self.app_packages,
                 sys.platform,
                 keep_up_to_date=self.keep_up_to_date
             )
