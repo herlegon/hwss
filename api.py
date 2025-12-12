@@ -106,6 +106,8 @@ class ParseTask:
     reinstall: bool = False
     use_local_rehost: bool = False
     local_rehost: str = ""
+    ffmpeg_selection: Literal['lgpl', 'gpl', 'user'] = 'lgpl'
+    ffmpeg_user_dir: str = ""
 
 
 @dataclass(slots=True)
