@@ -12,6 +12,6 @@ C:\Users\Arnaud\AppData\Local\herlegon\python\python.exe -m pip uninstall ^
 :: rmdir /S /Q C:\Users\Arnaud\AppData\Local\herlegon\cache
 
 :: C:\Users\Arnaud\AppData\Local\herlegon\python\python.exe wss.py --port 49990 --keep-alive --devmode
-python wss.py --port 49990 --keep-alive --devmode
+python .\hwss\wss.py --port 49990 --keep-alive --devmode
 
 
