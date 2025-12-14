@@ -1,5 +1,6 @@
 # bootstrap.py
 import sys
+import time
 import zipfile
 import urllib.request
 from pathlib import Path
@@ -10,7 +11,7 @@ BASE_DIR = Path(__file__).parent
 PACKAGES_DIR = BASE_DIR / "packages"
 
 # GitHub release URLs
-RELEASE_URL = "https://api.github.com/repos/youruser/yourrepo/releases/latest"
+RELEASE_URL = "https://api.github.com/repos/herlegon/rehost/releases/latest"
 
 
 def download_file(url, dest):
@@ -73,6 +74,9 @@ def get_local_version(server_name='hwss'):
 
 def get_latest_release_url():
     """Get download URL from GitHub releases"""
+    if "yourrepo" in RELEASE_URL:
+        raise Exception("Invalid repository URL (placeholder detected)")
+
     import json
 
     with urllib.request.urlopen(RELEASE_URL) as response:
@@ -106,6 +110,9 @@ def packages_exist():
 
 def check_for_updates(server_name='hwss'):
     """Check if newer version available"""
+    if "yourrepo" in RELEASE_URL:
+        return False, "0.0.0"
+
     import json
 
     local_version = get_local_version(server_name)
@@ -121,11 +128,15 @@ def check_for_updates(server_name='hwss'):
 def download_and_extract_packages():
     """Download and extract all packages"""
     temp_zip = BASE_DIR / "packages_temp.zip"
-
     try:
         # Get download URL and version
         download_url, version = get_latest_release_url()
 
+    except Exception as e:
+        print(f"Error: {str(e)}")
+        return False
+
+    try:
         # Download
         download_file(download_url, temp_zip)
 
@@ -139,16 +150,23 @@ def download_and_extract_packages():
             zip_ref.extractall(PACKAGES_DIR)
 
         print(f"Installation complete! (v{version})")
+        return True
+
+    except Exception as e:
+        print(f"Error: {str(e)}")
+        return False
 
     finally:
         if temp_zip.exists():
             temp_zip.unlink()
+            return True
 
+    return False
 
-def check_internet():
-    """Quick check if internet is available"""
+def is_github_reachable() -> bool:
     try:
-        urllib.request.urlopen('https://github.com', timeout=5)
+        # urllib.request.urlopen('https://github.com', timeout=5)
+        urllib.request.urlopen('https://www.google.com', timeout=5)
         return True
     except:
         return False
@@ -193,27 +211,45 @@ def main():
 
 
     # Check if packages exist
+    retry = 3
     if not packages_exist():
-        print("\nFirst run detected. Downloading packages...")
+        # Check for local source fallback
+        if (BASE_DIR / app).exists() and (BASE_DIR / app / "wss.py").exists():
+            print(f"Local source detected for '{app}'. Running from {BASE_DIR}.")
+            global PACKAGES_DIR
+            PACKAGES_DIR = BASE_DIR
+        else:
+            print("\nFirst run detected. Downloading packages...")
 
-        if not check_internet():
-            print("ERROR: No internet connection and packages not installed.")
-            print("Please connect to internet and try again.")
-            sys.exit(1)
+            if not is_github_reachable():
+                print("ERROR: No internet connection and packages not installed.")
+                print("Please connect to internet and try again.")
+                sys.exit(1)
 
-        download_and_extract_packages()
+            extracted: bool = False
+            try:
+                extracted = download_and_extract_packages()
+            except:
+                retry -= 1
+                print(f"retry: {retry}")
+            time.sleep(2)
 
-        print("\nRestarting to load packages...")
-        # Preserve original arguments when restarting
-        os.execv(sys.executable, [sys.executable] + sys.argv)
-        return
+            try:
+                print("\nRestarting to load packages...")
+            except:
+                sys.exit(1)
+
+            if retry:
+                # Preserve original arguments when restarting
+                os.execv(sys.executable, [sys.executable] + sys.argv)
+                return
 
     # Show current version
     current_version = get_local_version(app)
     print(f"Current {app} version: v{current_version}")
 
     # Check for updates (unless skipped or in devmode)
-    if not args.skip_update and not args.devmode and check_internet():
+    if not args.skip_update and not args.devmode and is_github_reachable():
         print("\nChecking for updates...")
         try:
             has_update, new_version = check_for_updates(app)
