@@ -177,15 +177,45 @@ def is_github_reachable() -> bool:
     except:
         return False
 
-API_VERSION = 1
+APP_API_VERSION = 1
 
 class SM(Enum):
     INIT = 'init'
+    INSTALL = 'install'
+    UPDATE = 'update'
 
 
     ENDED = 'ended'
     CRITICAL = 'critical'
-    UPDATE = 'update'
+
+
+def get_api_version(app: str) -> tuple[int, int] | None:
+    """Extract __version__ from app's __init__.py
+    """
+    init_file: Path = Path(__name__) / app / "__init__.py"
+    if not init_file.exists():
+        return None
+
+    try:
+        content = init_file.read_text(encoding='utf-8')
+
+        # Look for __version__ = "x.y" or __version__ = 'x.y'
+        # with X major and Y minor: major is non backward compatible
+        # Single line only, case-sensitive
+        for line in content.split('\n'):
+            line = line.strip()
+            if line.startswith('__version__') and '=' in line:
+                value = line.split('=', 1)[1].strip()
+                # Remove quotes (single or double)
+                value = value.strip('"').strip("'")
+                if match := re.search(r"(\d+)\.(\d+)", value):
+                    return (int(match.group(1)), int(match.group(2)))
+        return None
+
+    except Exception as e:
+        print(f"Warning: Could not read version from {init_file}: {e}")
+        return None
+
 
 
 def main():
@@ -212,31 +242,52 @@ def main():
     app: str = args.app
 
     sm_state = SM.INIT
+
+
+
     while sm_state != SM.ENDED:
         if sm_state == SM.INIT:
-            # Get oganization settings
-            #
 
+            app_api_version = get_api_version(app)
+            if app_api_version is None:
+                # Application is not installed yet
+                sm_state = SM.INSTALL
+                continue
 
-            # End
-            if args.skip_update and is_installed(app):
-                if api_version == API_VERSION:
+            else:
+                app_api_version_major, app_api_version_minor = app_api_version
+
+                # Installed with same API version
+                if app_api_version_major == app_api_version:
                     sm_state = SM.ENDED
                     break
 
                 # Not compatible API
-                if api_version > API_VERSION:
-                    # Force update this
+                if api_version > app_api_version_major:
+                    # Force update this backend to match frontend
                     sm_state = SM.UPDATE
 
-                elif api_version < API_VERSION:
-                    # The user must install latest version
+                elif api_version < app_api_version_major:
+                    # The user must install latest frontend version
                     sm_state = SM.ENDED
                     sys.exit(-2)
 
+
         elif sm_state == SM.UPDATE:
-            # check internet
-            is_internat
+            # (?)
+            # remove the __init__ to force reinstall
+            sm_state = SM.INSTALL
+
+
+        elif sm_state == SM.INSTALL:
+            # Is internet Available
+            # if not exit with error
+
+            # Is Repo available
+            # if not exit with critical
+
+            # download the latest compatible archive
+            # archive must be like:
 
 
         elif sm_state == SM.ENDED:
