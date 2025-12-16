@@ -1,4 +1,5 @@
 # bootstrap.py
+from enum import Enum
 import sys
 import time
 import zipfile
@@ -12,6 +13,11 @@ PACKAGES_DIR = BASE_DIR / "packages"
 
 # GitHub release URLs
 RELEASE_URL = "https://api.github.com/repos/herlegon/rehost/releases/latest"
+
+
+def is_installed(app: str) -> bool:
+    # if folder exists
+    return False
 
 
 def download_file(url, dest):
@@ -171,6 +177,16 @@ def is_github_reachable() -> bool:
     except:
         return False
 
+API_VERSION = 1
+
+class SM(Enum):
+    INIT = 'init'
+
+
+    ENDED = 'ended'
+    CRITICAL = 'critical'
+    UPDATE = 'update'
+
 
 def main():
     # Parse bootstrap-specific args first
@@ -181,6 +197,7 @@ def main():
     parser.add_argument('--app', type=str, default='hwss')
     parser.add_argument('--skip-update', action='store_true')
     parser.add_argument('--list-apps', action='store_true')
+    parser.add_argument('--api-version', type=int, default=1)
 
     # Server arguments (will be passed through)
     parser.add_argument('--host', default="127.0.0.1")
@@ -190,6 +207,59 @@ def main():
     parser.add_argument('--log-file', type=str, default=None)
 
     args, unknown = parser.parse_known_args()
+
+    api_version = args.api_version
+    app: str = args.app
+
+    sm_state = SM.INIT
+    while sm_state != SM.ENDED:
+        if sm_state == SM.INIT:
+            # Get oganization settings
+            #
+
+
+            # End
+            if args.skip_update and is_installed(app):
+                if api_version == API_VERSION:
+                    sm_state = SM.ENDED
+                    break
+
+                # Not compatible API
+                if api_version > API_VERSION:
+                    # Force update this
+                    sm_state = SM.UPDATE
+
+                elif api_version < API_VERSION:
+                    # The user must install latest version
+                    sm_state = SM.ENDED
+                    sys.exit(-2)
+
+        elif sm_state == SM.UPDATE:
+            # check internet
+            is_internat
+
+
+        elif sm_state == SM.ENDED:
+            break
+
+    #   no -> install
+
+    # 2.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
     # List servers and exit if requested
     if args.list_apps:
