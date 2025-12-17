@@ -10,6 +10,7 @@ import re
 
 BASE_DIR = Path(__file__).parent
 PACKAGES_DIR = BASE_DIR / "packages"
+APP_ROOT_DIR: Path = Path(__file__).parent.resolve()
 
 # GitHub release URLs
 RELEASE_URL = "https://api.github.com/repos/herlegon/rehost/releases/latest"
@@ -20,7 +21,7 @@ def is_installed(app: str) -> bool:
     return False
 
 
-def download_file(url, dest):
+def download_file(url: str, dest: str):
     """Download file with progress"""
     print(f"Downloading from {url}...")
 
@@ -40,12 +41,11 @@ def download_file(url, dest):
                     percent = (downloaded / total_size) * 100
                     print(f"\rProgress: {percent:.1f}%", end='')
 
-    print()
 
 
 def get_version_from_init(package_name: str):
     """Extract __version__ from package's __init__.py"""
-    init_file: Path = PACKAGES_DIR / package_name / "__init__.py"
+    init_file: Path = APP_ROOT_DIR / package_name / "__init__.py"
 
     if not init_file.exists():
         return None
@@ -94,19 +94,6 @@ def get_latest_release_url():
 
     raise Exception("No packages.zip found in latest release")
 
-
-def get_available_app():
-    """List all available server packages in packages/ directory"""
-    if not PACKAGES_DIR.exists():
-        return []
-
-    # Find all directories that contains a websocket server
-    apps: list[str] = []
-    for item in PACKAGES_DIR.iterdir():
-        if item.is_dir() and (item / "wss.py").exists():
-            apps.append(item.name)
-
-    return sorted(apps)
 
 
 def packages_exist():
@@ -189,32 +176,52 @@ class SM(Enum):
     CRITICAL = 'critical'
 
 
-def get_api_version(app: str) -> tuple[int, int] | None:
-    """Extract __version__ from app's __init__.py
+
+def get_api_version(app_name: str, app_dir: Path | None = None) -> tuple[int, int] | None:
+    """Extract __api_version__ from app's __init__.py
     """
-    init_file: Path = Path(__name__) / app / "__init__.py"
+    # Look for __api_version__ = "x.y" or __api_version__ = 'x.y'
+    # with X major and Y minor: major is non backward compatible
+    # Single line only, case-sensitive
+    if app_dir is None:
+        init_file: Path = APP_ROOT_DIR / app_name / "__init__.py"
+    else:
+        init_file: Path = app_dir / "__init__.py"
     if not init_file.exists():
         return None
 
     try:
         content = init_file.read_text(encoding='utf-8')
-
-        # Look for __version__ = "x.y" or __version__ = 'x.y'
-        # with X major and Y minor: major is non backward compatible
-        # Single line only, case-sensitive
         for line in content.split('\n'):
-            line = line.strip()
-            if line.startswith('__version__') and '=' in line:
-                value = line.split('=', 1)[1].strip()
-                # Remove quotes (single or double)
-                value = value.strip('"').strip("'")
+            if line.strip().startswith('__api_version__') and '=' in line:
+                value = line.split('=', 1)[1].strip().strip('"\'')
                 if match := re.search(r"(\d+)\.(\d+)", value):
                     return (int(match.group(1)), int(match.group(2)))
-        return None
 
     except Exception as e:
         print(f"Warning: Could not read version from {init_file}: {e}")
         return None
+
+
+
+def get_installed_apps():
+    """List all available applications installed: they all have a wss
+    """
+
+    # Find all directories that contains a websocket server
+    apps: dict[str, tuple[int, int] | None] = {}
+    for item in APP_ROOT_DIR.iterdir():
+        if (
+            item.is_dir()
+            and (item / "wss.py").exists()
+            and (item / "__init__.py").exists()
+        ):
+            app_name = item.name
+            api_version = get_api_version(app_name=app_name)
+            if api_version is not None:
+                apps[app_name] = api_version
+
+    return apps
 
 
 
@@ -238,40 +245,62 @@ def main():
 
     args, unknown = parser.parse_known_args()
 
-    api_version = args.api_version
+    if match := re.search(r"(\d+)\.(\d+)", args.api_version):
+        fe_api_version = (int(match.group(1)), int(match.group(2)))
+    else:
+        print("erroneous api version")
+        sys.exit(-1)
+
     app: str = args.app
 
     sm_state = SM.INIT
 
 
+    # List servers and exit if requested
+    if args.list_apps:
+        available = get_installed_apps()
+        if available:
+            print("Available app:")
+            for app_name, api_version in available.items():
+                print(f"  - {app_name}: {'.'.join(api_version)}")
+        else:
+            print("No servers found. Packages may not be installed yet.")
+        return
+
+    app: str = args.app
+    print("=" * 50)
+    print(f"Bootstrap starting ({app})...")
+    print("=" * 50)
+
 
     while sm_state != SM.ENDED:
         if sm_state == SM.INIT:
 
-            app_api_version = get_api_version(app)
-            if app_api_version is None:
-                # Application is not installed yet
+            be_api_version = get_api_version(app)
+            if be_api_version is None:
+                # Application is not installed yet,
+                # start the hwss, let's first update it
                 sm_state = SM.INSTALL
                 continue
 
             else:
-                app_api_version_major, app_api_version_minor = app_api_version
 
-                # Installed with same API version
-                if app_api_version_major == app_api_version:
+                # Installed with same API version, no need to update
+                # neither the bootstrap&hinstall, nor the appli
+                if fe_api_version == be_api_version:
                     sm_state = SM.ENDED
                     break
 
                 # Not compatible API
-                if api_version > app_api_version_major:
+                if fe_api_version[0] > be_api_version[0]:
                     # Force update this backend to match frontend
+                    # It will automatically update the bootstrap if required
                     sm_state = SM.UPDATE
 
-                elif api_version < app_api_version_major:
+                elif fe_api_version[0] < be_api_version[0]:
                     # The user must install latest frontend version
                     sm_state = SM.ENDED
                     sys.exit(-2)
-
 
         elif sm_state == SM.UPDATE:
             # (?)
@@ -280,14 +309,33 @@ def main():
 
 
         elif sm_state == SM.INSTALL:
-            # Is internet Available
-            # if not exit with error
+            # First, get the api version of the bootstrap
+            hbase_api_version = get_api_version(
+                "hwss", Path(__file__).resolve() / "modules" / "hwss"
+            )
+            if hbase_api_version is None:
+                # No webserver
+                print("no hwss installed, huh?")
+
+            else:
+                # Get latest version of the same major version
+
 
             # Is Repo available
             # if not exit with critical
 
             # download the latest compatible archive
-            # archive must be like:
+
+            # Update without reinstalling pip packages:
+            #   hbase-x.y.tar.gz
+            #   - hwss
+            #   - hinstall (backend)
+            #   - bootstrap
+
+            # update hboot if latest version > current version:
+
+
+
 
 
         elif sm_state == SM.ENDED:
@@ -312,23 +360,7 @@ def main():
 
 
 
-    # List servers and exit if requested
-    if args.list_apps:
-        available = get_available_app()
-        if available:
-            print("Available servers:")
-            for server in available:
-                version = get_version_from_init(server)
-                version_str = f" (v{version})" if version else ""
-                print(f"  - {server}{version_str}")
-        else:
-            print("No servers found. Packages may not be installed yet.")
-        return
 
-    app: str = args.app
-    print("=" * 50)
-    print(f"Bootstrap starting ({app})...")
-    print("=" * 50)
 
 
     # Check if packages exist
@@ -404,7 +436,7 @@ def main():
     server_module = f"{app}.server"
 
     if not app_dir.exists():
-        available = get_available_app()
+        available = get_installed_apps()
         print(f"\nERROR: Server '{app}' not found!")
         print(f"Looking for: {app_dir}")
 
