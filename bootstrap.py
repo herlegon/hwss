@@ -1,12 +1,13 @@
-from enum import Enum
+import argparse
+from enum import IntEnum
 from http import client
 from pprint import pprint
 import shutil
+import signal
 import sys
 import tarfile
 import tempfile
 import time
-import zipfile
 import urllib.request
 from pathlib import Path
 import os
@@ -19,17 +20,13 @@ import re
 import runpy
 
 
-
-class FSM(Enum):
-    INIT = 'init'
-    UPDATE_HBASE = 'update_hbase'
-    INSTALL_APP = 'install_app'
-    UPDATE_APP = 'update_backend'
-
-
-    ENDED = 'ended'
-    CRITICAL = 'critical'
-
+class _FSM(IntEnum):
+    INIT = 0
+    UPDATE_HBASE = 1
+    INSTALL_APP = 2
+    UPDATE_APP = 3
+    ENDED = 4
+    CRITICAL = 5
 
 
 def get_install_dir(
@@ -220,8 +217,6 @@ def download_file(url: str, filepath: Path) -> bool:
 
 
 def main():
-    # Parse bootstrap-specific args first
-    import argparse
     parser = argparse.ArgumentParser(description='Bootstrap and start server')
 
     # Bootstrap-specific arguments
@@ -245,7 +240,8 @@ def main():
     # When restarting
     if args.restart_iter >= 3:
         print(f"Too many restart")
-        sys.exit()
+        sys.stdout.flush()
+        sys.exit(-1)
 
     if args.restart_iter > 1:
         time.sleep(1)
@@ -319,11 +315,11 @@ def main():
 
 
     restart: bool = False
-    fsm_state = FSM.INIT
-    while fsm_state != FSM.ENDED:
-        print(FSM(fsm_state))
+    fsm_state = _FSM.INIT
+    while fsm_state != _FSM.ENDED:
+        print(_FSM(fsm_state))
 
-        if fsm_state == FSM.INIT:
+        if fsm_state == _FSM.INIT:
             # Compare frontend api version vs backend
 
             be_api_version = get_api_version(app, app_install_dir=app_install_dir)
@@ -332,30 +328,30 @@ def main():
             if be_api_version is None:
                 # Backend for the application is not installed yet,
                 # start the hwss, let's first update it
-                fsm_state = FSM.UPDATE_HBASE
+                fsm_state = _FSM.UPDATE_HBASE
                 continue
 
             elif fe_api_version is None:
                 # Not specified, because the backend is not installed
                 # use current api
-                fsm_state = FSM.ENDED
+                fsm_state = _FSM.ENDED
                 if devmode:
-                    fsm_state = FSM.UPDATE_HBASE
+                    fsm_state = _FSM.UPDATE_HBASE
 
             elif fe_api_version == be_api_version:
                 # Installed with same API version, no need to update
                 # neither the bootstrap&hinstall, nor the appli
-                fsm_state = FSM.ENDED
+                fsm_state = _FSM.ENDED
 
             # Not compatible API
             elif fe_api_version[0] > be_api_version[0]:
                 # Force update the backend to match frontend
                 # It will automatically update the bootstrap if required
-                fsm_state = FSM.UPDATE_HBASE
+                fsm_state = _FSM.UPDATE_HBASE
 
             elif fe_api_version[0] < be_api_version[0]:
                 # The user must install latest frontend version
-                fsm_state = FSM.ENDED
+                fsm_state = _FSM.ENDED
                 print("Not compatible API version. Update frontend.")
                 sys.exit(-2)
 
@@ -363,13 +359,13 @@ def main():
                 print("unknow event")
                 sys.exit(-1)
 
-        elif fsm_state == FSM.UPDATE_APP:
+        elif fsm_state == _FSM.UPDATE_APP:
             # (?)
             # remove the __init__ to force reinstall
-            fsm_state = FSM.INSTALL_APP
+            fsm_state = _FSM.INSTALL_APP
 
 
-        elif fsm_state == FSM.UPDATE_HBASE:
+        elif fsm_state == _FSM.UPDATE_HBASE:
 
             # First, get the api version of the hbase (bootstrap + hwss + hinstall)
             hbase_api_version = get_api_version(
@@ -464,10 +460,10 @@ def main():
 
                 # Because a new version has been installed, restart
                 restart = True
-                fsm_state = FSM.ENDED
+                fsm_state = _FSM.ENDED
 
 
-        elif fsm_state == FSM.ENDED:
+        elif fsm_state == _FSM.ENDED:
             break
 
         # Restart or launch the webserver
@@ -486,6 +482,7 @@ def main():
                 + [f"--restart-iter", f"{args.restart_iter + 1}"]
             )
             print(f"restart with argv: {argv}")
+            sys.stdout.flush()
             os.execv(sys.executable, argv)
 
         else:
@@ -497,4 +494,5 @@ def main():
 
 
 if __name__ == "__main__":
+    signal.signal(signal.SIGINT, signal.SIG_DFL)
     main()
