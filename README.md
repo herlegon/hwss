@@ -1,1 +1,1 @@
-# hwss
+# hbase
