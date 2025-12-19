@@ -1,23 +1,25 @@
 import argparse
 from enum import IntEnum
-from http import client
 from pprint import pprint
 import shutil
 import signal
 import sys
-import tarfile
 import tempfile
 import time
-import urllib.request
 from pathlib import Path
 import os
-import requests
-from urllib.error import (
-    URLError,
-    HTTPError,
-)
 import re
 import runpy
+
+from bootstrap_helpers import (
+    download_file,
+    find_latest_hbase_for_api_major,
+    get_api_version,
+    get_install_dir,
+    get_installed_apps,
+    is_github_alive,
+    extract_filtered_lib,
+)
 
 
 class _FSM(IntEnum):
@@ -27,192 +29,6 @@ class _FSM(IntEnum):
     UPDATE_APP = 3
     ENDED = 4
     CRITICAL = 5
-
-
-def get_install_dir(
-    organization: str = "herlegon"
-) -> Path:
-    """Get platform-specific backend directory"""
-
-    if sys.platform == "win32":
-        # Windows: Use AppData\Local
-        base = Path(
-            os.environ.get('LOCALAPPDATA', Path.home() / "AppData" / "Local")
-        )
-
-    elif sys.platform == "linux":
-        # Linux: Use XDG Base Directory
-        base = Path(os.environ.get('XDG_DATA_HOME', Path.home() / ".local" / "share"))
-
-    elif sys.platform == "darwin":
-        # macOS: Use Application Support
-        base = Path.home() / "Library" / "Application Support"
-
-    else:
-        print(f"Error: platform not supported: {sys.platform}")
-        sys.exit(-1)
-
-    return base.resolve() / organization
-
-
-def get_api_version(
-    app_name: str,
-    app_install_dir: Path
-) -> tuple[int, int] | None:
-    """Extract __api_version__ from app's __init__.py
-    """
-    # Look for __api_version__ = "x.y" or __api_version__ = 'x.y'
-    # with X major and Y minor: major is non backward compatible
-    # Single line only, case-sensitive
-    init_file: Path = app_install_dir / app_name / "__init__.py"
-    print(f"search {app_name} version {init_file}")
-
-    if not init_file.exists():
-        return None
-
-    try:
-        content = init_file.read_text(encoding='utf-8')
-        for line in content.split('\n'):
-            if line.strip().startswith('__api_version__') and '=' in line:
-                value = line.split('=', 1)[1].strip().strip('"\'')
-                if match := re.search(r"(\d+)\.(\d+)", value):
-                    return (int(match.group(1)), int(match.group(2)))
-
-    except Exception as e:
-        print(f"Warning: Could not read version from {init_file}: {e}")
-        return None
-
-
-
-def get_installed_apps(app_install_dir: Path):
-    """List all available applications installed: they all have a wss
-    """
-
-    # Find all directories that contains a websocket server
-    apps: dict[str, tuple[int, int] | None] = {}
-    for item in app_install_dir.iterdir():
-        if (
-            item.is_dir()
-            and (item / "wss.py").exists()
-            and (item / "__init__.py").exists()
-        ):
-            app_name = item.name
-            api_version = get_api_version(app_name=app_name, app_install_dir=app_install_dir)
-            if api_version is not None:
-                apps[app_name] = api_version
-
-    return apps
-
-
-
-def find_latest_hbase_for_api_major(api_major: str = "") -> dict[str, int | str] | None:
-    """Find latest hbase package for specific API major version (any minor/patch)"""
-    print("find latest hbase version")
-
-    # Get all releases
-    url = "https://api.github.com/repos/herlegon/hbase/releases"
-    response = requests.get(url)
-    releases = response.json()
-
-    # Pattern: hbase-{major}.{minor}.{patch}.tar.gz
-    if not api_major:
-        pattern = r"hbase-(\d+)\.(\d+)\.(\d+)\.tar\.gz"
-        compatible = []
-        for release in releases:
-            for asset in release['assets']:
-                match = re.match(pattern, asset['name'])
-                if match:
-                    major = int(match.group(1))
-                    minor = int(match.group(2))
-                    patch = int(match.group(3))
-                    full_version = f"{major}.{minor}.{patch}"
-                    compatible.append({
-                        'version': full_version,
-                        'api_major': major,
-                        'api_minor': minor,
-                        'patch': patch,
-                        'url': asset['browser_download_url']
-                    })
-
-        if not compatible:
-            return None
-
-        # Sort by major, minor, and patch (desc) to get the latest overall release
-        compatible.sort(key=lambda x: (x['api_major'], x['api_minor'], x['patch']), reverse=True)
-        return compatible[0]
-
-    else:
-        pattern = rf"hbase-{api_major}\.(\d+)\.(\d+)\.tar\.gz"
-        compatible = []
-        for release in releases:
-            for asset in release['assets']:
-                match = re.match(pattern, asset['name'])
-                if match:
-                    minor = int(match.group(1))
-                    patch = int(match.group(2))
-                    full_version = f"{api_major}.{minor}.{patch}"
-                    compatible.append({
-                        'version': full_version,
-                        'api_major': api_major,
-                        'api_minor': minor,
-                        'patch': patch,
-                        'url': asset['browser_download_url']
-                    })
-
-        if not compatible:
-            return None
-        # Sort by minor (desc), then patch (desc) to get latest
-        compatible.sort(key=lambda x: (x['api_minor'], x['patch']), reverse=True)
-        return compatible[0]
-
-
-def is_github_alive() -> bool:
-    url = "https://api.github.com"
-    try:
-        response = requests.get(url)
-        response.raise_for_status()
-        return True
-
-    except requests.exceptions.RequestException as e:
-        pass
-
-    return False
-
-
-
-def download_file(url: str, filepath: Path) -> bool:
-    print(f"Downloading from {url}...")
-    try:
-        response: client.HTTPResponse
-        with urllib.request.urlopen(url) as response:
-            total_size = int(response.headers.get('content-length', 0))
-            if total_size == 0:
-                print("Failed to retrieve content size from the server.")
-                return False
-
-            with open(filepath, 'wb') as f:
-                downloaded = 0
-                while True:
-                    chunk = response.read(8192)
-                    if not chunk:
-                        break
-                    f.write(chunk)
-                    downloaded += len(chunk)
-
-        # Verify if the full file was downloaded
-        if downloaded != total_size:
-            print(f"Download incomplete. Expected {total_size} bytes, but got {downloaded} bytes.")
-            return False
-
-    except (URLError, HTTPError) as e:
-        print(f"Download failed: {e}")
-
-    except Exception as e:
-        print(f"An unexpected error occurred: {e}")
-        return False
-
-    return True
-
 
 
 
@@ -249,9 +65,21 @@ def main():
     # devmode
     devmode: bool = args.devmode
 
+    # --- PATH DETECTION LOGIC MODIFIED FOR CYTHON ---
+    # Determine if we are running as a compiled binary or a script
+    # If compiled via cython --embed, sys.executable points to the binary
+    # If standard python, sys.executable points to /usr/bin/python3
+    is_compiled = (sys.executable == os.path.abspath(sys.argv[0]))
+
+    if is_compiled:
+        # We are running as a binary. The "this_dir" is where the binary sits.
+        this_dir = Path(sys.executable).resolve().parent
+    else:
+        # Standard script execution
+        this_dir = Path(__file__).resolve().parent
+
     # Installation directory
     # This won't work in dev mode
-    this_dir: Path = Path(__file__).resolve().parent
     app_install_dir: Path = this_dir.parent
     hbase_dir = this_dir
     if devmode:
@@ -295,7 +123,7 @@ def main():
 
     # List servers and exit if requested
     if args.list_apps:
-        available = get_installed_apps()
+        available: dict = get_installed_apps()
         if available:
             print("Available app:")
             for app_name, api_version in available.items():
@@ -451,9 +279,7 @@ def main():
 
                 # Extract
                 try:
-                    with tarfile.open(archive_path, 'r:gz') as tar_file:
-                        tar_file.extraction_filter = (lambda member, path: member)
-                        tar_file.extractall(path=hbase_dir)
+                    extract_filtered_lib(archive_path=archive_path, hbase_dir=hbase_dir)
                 except:
                     print("failed to install hbase")
                     sys.exit(-1)
@@ -471,26 +297,32 @@ def main():
             # Preserve original arguments when restarting
             # TODO: this has to be handled by the frontend
             # if devmode, it's safe to restart
-            if args.restart_iter > 0:
-                argv = sys.argv[:-2]
-            else:
-                argv = sys.argv
 
-            argv = (
-                [sys.executable]
-                + argv
-                + [f"--restart-iter", f"{args.restart_iter + 1}"]
-            )
-            print(f"restart with argv: {argv}")
+            # Filter out existing restart-iter to avoid stacking
+            current_args = [arg for arg in sys.argv[1:] if not arg.startswith('--restart-iter')]
+            if is_compiled:
+                # Running as standalone binary (./bootstrap)
+                executable = sys.executable
+                cmd_args = [executable] + current_args
+            else:
+                # Running as script (python bootstrap.py)
+                executable = sys.executable
+                cmd_args = [executable, sys.argv[0]] + current_args
+
+            cmd_args.extend(["--restart-iter", str(args.restart_iter + 1)])
+
+            print(f"Restarting with args: {cmd_args}")
             sys.stdout.flush()
-            os.execv(sys.executable, argv)
+            sys.stdout.flush()
+            os.execv(executable, cmd_args)
 
         else:
             if not app_entry.exists():
                 print(f"\nERROR: Server file not found: {app_entry}")
                 sys.exit(1)
 
-            runpy.run_module(app_entry, run_name='__main__')
+            # Use run_path, and convert Path to str for compatibility
+            runpy.run_path(str(app_entry), run_name='__main__')
 
 
 if __name__ == "__main__":
