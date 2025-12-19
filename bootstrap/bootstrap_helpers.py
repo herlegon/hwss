@@ -208,16 +208,17 @@ def download_file(url: str, filepath: Path) -> bool:
     return True
 
 
+
 def extract_filtered_lib(archive_path: Path, hbase_dir: Path):
     """
-    Extract platform-specific files from the tar.gz archive to the target directory.
-    Filters out files that don't match the current platform.
+    Extract files from the tar.gz archive to the target directory,
+    skipping files that are specific to other platforms.
 
     Args:
-        archive_path (str): Path to the tar.gz archive.
-        hbase_dir (str): Directory to extract the files to.
+        archive_path (Path): Path to the tar.gz archive.
+        hbase_dir (Path): Directory to extract the files to.
     """
-    # Define platform-specific file extensions (you can adjust this as needed)
+    # Define platform-specific file extensions
     platform_files = {
         'linux': '.so',
         'darwin': '.dylib',
@@ -227,22 +228,29 @@ def extract_filtered_lib(archive_path: Path, hbase_dir: Path):
     # Detect current platform
     platform = sys.platform.lower()
     if platform.startswith('linux'):
-        platform_name = 'linux'
+        current_ext = platform_files['linux']
     elif platform.startswith('darwin'):
-        platform_name = 'darwin'
+        current_ext = platform_files['darwin']
     elif platform.startswith('win'):
-        platform_name = 'win32'
+        current_ext = platform_files['win32']
     else:
         logger.error(f"Unsupported platform: {platform}")
         sys.exit(-1)
 
-    # Extract files
+    # Extract files, skipping other platform-specific files
     with tarfile.open(archive_path, 'r:gz') as tar_file:
         for member in tar_file.getmembers():
-            # Only extract files that match the platform's expected file extension
-            if member.name.endswith(platform_files[platform_name]):
+            # Skip files that match platform extensions of other platforms
+            skip = False
+            for ext in platform_files.values():
+                if ext != current_ext and member.name.endswith(ext):
+                    skip = True
+                    logger.debug(f"Skipping {member.name} (not for this platform)")
+                    break
+            if not skip:
                 tar_file.extract(member, path=hbase_dir)
                 logger.debug(f"Extracted {member.name} to {hbase_dir}")
+
 
 
 def remove_restart_iter(args) -> list[str]:
