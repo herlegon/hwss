@@ -85,6 +85,7 @@ class InstallWorker(mp.Process):
         self.keep_up_to_date: bool = False
         self.app_packages : dict[str, str] = {}
         self.py_packages: PyPackages = None
+        self.local_backend: bool = True
 
 
     def run(self):
@@ -232,6 +233,7 @@ class InstallWorker(mp.Process):
         packages_to_install = ext_packages.get_all_except('python')
 
         # Install external packages
+        installed: bool = False
         if packages_to_install:
             installed: bool = download_install_ext_packages(
                 packages=packages_to_install,

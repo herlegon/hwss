@@ -1,4 +1,5 @@
 import argparse
+import logging
 import os
 from pathlib import Path
 import re
@@ -31,8 +32,36 @@ def main():
     parser.add_argument('--keep-alive', action='store_true')
     parser.add_argument('--devmode', action='store_true')
     parser.add_argument('--log-file', type=str, default=None)
+    parser.add_argument(
+        '--log-level',
+        default='INFO',
+        choices=['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'],
+        help='Set the logging level'
+    )
 
     args = parser.parse_args()
+
+    # Setup logging
+    logging.addLevelName(logging.DEBUG, "[D]")
+    logging.addLevelName(logging.INFO, "[I]")
+    logging.addLevelName(logging.WARNING, "[W]")
+    logging.addLevelName(logging.ERROR, "[E]")
+    logging.addLevelName(logging.CRITICAL, "[C]")
+
+    log_kwargs = {
+        "level": getattr(logging, args.log_level.upper()),
+        "format": '%(asctime)s - %(name)s - %(levelname)s %(message)s',
+        "datefmt": '%Y-%m-%d %H:%M:%S',
+    }
+
+    if args.log_file:
+        log_kwargs["filename"] = args.log_file
+        log_kwargs["filemode"] = "a"
+    else:
+        log_kwargs["stream"] = sys.stderr
+
+    logging.basicConfig(**log_kwargs)
+    logger = logging.getLogger("bootstrap")
 
     # When restarting
     if args.restart_iter >= 3:
@@ -53,13 +82,13 @@ def main():
     hwss_dir = hbase_dir / "modules" / "hwss"
     if devmode:
         # Use the local repos
-        print("devmode")
+        logger.info("devmode")
         app_install_dir = this_dir.parent.parent
         hwss_dir = this_dir.parent / "hwss"
         hbase_dir = get_install_dir() / "python"
 
     elif args.default_install_dir:
-        print("User defined installation path (debug only)")
+        logger.info("User defined installation path (debug only)")
         org_install_dir = get_install_dir()
         app_install_dir = org_install_dir
         hbase_dir = org_install_dir / "python"
@@ -85,26 +114,26 @@ def main():
 
     else:
         fe_api_version = None
-        print("erroneous api version")
+        logger.error("erroneous api version")
         sys.exit(1)
 
     # List applications and exit
     if args.list_apps:
         available: dict = get_installed_apps()
         if available:
-            print("Available app:")
+            logger.info("Available app:")
             for app_name, api_version in available.items():
-                print(f"  - {app_name}: {'.'.join(api_version)}")
+                logger.info(f"  - {app_name}: {'.'.join(map(str, api_version))}")
         else:
-            print("No servers found. Packages may not be installed yet.")
+            logger.info("No servers found. Packages may not be installed yet.")
         return
 
-    print(f"Bootstrap starting: app={app}")
-    print("Installation directories:")
-    print(f"  app_install_dir: {app_install_dir}")
-    print(f"  hbase: {hbase_dir}")
-    print(f"  hwss: {hwss_dir}")
-    print(f"  FrontEnd API version: {fe_api_version}")
+    logger.info(f"Bootstrap starting: app={app}")
+    logger.info("Installation directories:")
+    logger.info(f"  app_install_dir: {app_install_dir}")
+    logger.info(f"  hbase: {hbase_dir}")
+    logger.info(f"  hwss: {hwss_dir}")
+    logger.info(f"  FrontEnd API version: {fe_api_version}")
 
     try:
         restart = fsm(
@@ -116,7 +145,7 @@ def main():
             devmode=devmode,
         )
     except Exception as e:
-        print(f"Exception while running fsm: {str(e)}")
+        logger.error(f"Exception while running fsm: {str(e)}")
         sys.exit(1)
 
     # Restart or launch the webserver
@@ -131,13 +160,13 @@ def main():
         )
         cmd_args.extend(["--restart-iter", str(args.restart_iter + 1)])
 
-        print(f"Restarting with args: {cmd_args}")
+        logger.info(f"Restarting with args: {cmd_args}")
         sys.stdout.flush()
         os.execv(executable, cmd_args)
 
     else:
         if not app_entry.exists():
-            print(f"\nERROR: Server file not found: {app_entry}")
+            logger.error(f"\nERROR: Server file not found: {app_entry}")
             sys.exit(1)
 
         # Use run_path, and convert Path to str for compatibility

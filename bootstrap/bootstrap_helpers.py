@@ -1,4 +1,6 @@
 from enum import Enum
+import logging
+
 from http import client
 import os
 from pathlib import Path
@@ -15,6 +17,8 @@ from urllib.error import (
     URLError,
     HTTPError,
 )
+
+logger = logging.getLogger("bootstrap")
 
 
 def get_install_dir(
@@ -37,7 +41,7 @@ def get_install_dir(
         base = Path.home() / "Library" / "Application Support"
 
     else:
-        print(f"Error: platform not supported: {sys.platform}")
+        logger.error(f"Error: platform not supported: {sys.platform}")
         sys.exit(-1)
 
     return base.resolve() / organization
@@ -53,7 +57,7 @@ def get_api_version(
     # with X major and Y minor: major is non backward compatible
     # Single line only, case-sensitive
     init_file: Path = app_install_dir / app_name / "__init__.py"
-    print(f"search {app_name} version {init_file}")
+    logger.debug(f"search {app_name} version {init_file}")
 
     if not init_file.exists():
         return None
@@ -67,7 +71,7 @@ def get_api_version(
                     return (int(match.group(1)), int(match.group(2)))
 
     except Exception as e:
-        print(f"Warning: Could not read version from {init_file}: {e}")
+        logger.warning(f"Warning: Could not read version from {init_file}: {e}")
         return None
 
 
@@ -171,13 +175,13 @@ def is_github_alive() -> bool:
 
 
 def download_file(url: str, filepath: Path) -> bool:
-    print(f"Downloading from {url}")
+    logger.info(f"Downloading from {url}")
     try:
         response: client.HTTPResponse
         with urllib.request.urlopen(url) as response:
             total_size = int(response.headers.get('content-length', 0))
             if total_size == 0:
-                print("Failed to retrieve content size from the server.")
+                logger.warning("Failed to retrieve content size from the server.")
                 return False
 
             with open(filepath, 'wb') as f:
@@ -191,14 +195,14 @@ def download_file(url: str, filepath: Path) -> bool:
 
         # Verify if the full file was downloaded
         if downloaded != total_size:
-            print(f"Download incomplete. Expected {total_size} bytes, but got {downloaded} bytes.")
+            logger.error(f"Download incomplete. Expected {total_size} bytes, but got {downloaded} bytes.")
             return False
 
     except (URLError, HTTPError) as e:
-        print(f"Download failed: {e}")
+        logger.error(f"Download failed: {e}")
 
     except Exception as e:
-        print(f"An unexpected error occurred: {e}")
+        logger.error(f"An unexpected error occurred: {e}")
         return False
 
     return True
@@ -229,7 +233,7 @@ def extract_filtered_lib(archive_path: Path, hbase_dir: Path):
     elif platform.startswith('win'):
         platform_name = 'win32'
     else:
-        print(f"Unsupported platform: {platform}")
+        logger.error(f"Unsupported platform: {platform}")
         sys.exit(-1)
 
     # Extract files
@@ -238,7 +242,7 @@ def extract_filtered_lib(archive_path: Path, hbase_dir: Path):
             # Only extract files that match the platform's expected file extension
             if member.name.endswith(platform_files[platform_name]):
                 tar_file.extract(member, path=hbase_dir)
-                print(f"Extracted {member.name} to {hbase_dir}")
+                logger.debug(f"Extracted {member.name} to {hbase_dir}")
 
 
 def remove_restart_iter(args) -> list[str]:
@@ -284,8 +288,8 @@ def fsm(
                 app,
                 app_install_dir=hwss_dir.parent if app == "hwss" else app_install_dir
             )
-            print(f"{app}: be_api_version: {be_api_version}")
-            print(f"{app}: fe_api_version: {fe_api_version}")
+            logger.info(f"{app}: be_api_version: {be_api_version}")
+            logger.info(f"{app}: fe_api_version: {fe_api_version}")
             if be_api_version is None:
                 # Backend for the application is not installed yet,
                 # start the hwss, let's first update it
@@ -313,11 +317,11 @@ def fsm(
             elif fe_api_version[0] < be_api_version[0]:
                 # The user must install latest frontend version
                 fsm_state = _FSM.ENDED
-                print("Not compatible API version. Update frontend.")
+                logger.error("Not compatible API version. Update frontend.")
                 sys.exit(-2)
 
             else:
-                print("unknow event")
+                logger.error("unknow event")
                 sys.exit(-1)
 
 
@@ -336,7 +340,7 @@ def fsm(
             )
             if hbase_api_version is None:
                 # No webserver
-                print("no hbase installed, huh?")
+                logger.warning("no hbase installed, huh?")
 
             # Get latest version of the same major version as the app
             # hbase-1.2.5.tar.gz
@@ -364,12 +368,12 @@ def fsm(
 
                 time.sleep(1)
                 if not is_github_alive():
-                    print(f"GitHub API is not reachable")
+                    logger.error(f"GitHub API is not reachable")
                     sys.exit(-1)
                 retry -= 1
 
             if hbase_release is None:
-                print("error: release not found")
+                logger.error("error: release not found")
                 sys.exit(-1)
 
             # Download and extract archive
@@ -383,7 +387,7 @@ def fsm(
 
                 # Verify if the destination path is accessible
                 if not temp_dir_path.exists():
-                    print(f"Temporary directory {temp_dir_path} does not exist.")
+                    logger.error(f"Temporary directory {temp_dir_path} does not exist.")
                     return False
 
                 # Download
@@ -393,10 +397,10 @@ def fsm(
                     try:
                         success = download_file(url=archive_url, filepath=archive_path)
                     except:
-                        print(f"retry")
+                        logger.debug(f"retry")
                         pass
                 if not success:
-                    print(f"Failed to download {archive_url}")
+                    logger.error(f"Failed to download {archive_url}")
                     sys.exit(-1)
 
                 # Remove the modules that will be installed: hwss, hinstall
@@ -411,7 +415,7 @@ def fsm(
                 try:
                     extract_filtered_lib(archive_path=archive_path, hbase_dir=hbase_dir)
                 except:
-                    print("failed to install hbase")
+                    logger.error("failed to install hbase")
                     sys.exit(-1)
 
                 # Because a new version has been installed, restart
