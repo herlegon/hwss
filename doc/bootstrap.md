@@ -128,3 +128,26 @@ github/
 ```
 
 
+
+
+```
+A:/
+│
+├── hrelease/
+│   ├── dockerfile
+│   ├── setup.py              # Main build configuration
+│   ├── build_bootstrap.sh    # Linux/Mac build script
+│   ├── build_bootstrap.bat   # Windows build script
+│   └── dist/
+│
+├── hinstall/
+│   └── hinstall/
+│       ├── __init__.py
+│       └── ...
+│
+└── hwss/
+    └── bootstrap/
+        ├── bootstrap.py
+        └── bootstrap_helpers.py
+```
+
