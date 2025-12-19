@@ -1,9 +1,14 @@
+from enum import Enum
 from http import client
 import os
 from pathlib import Path
+from pprint import pprint
 import re
 import tarfile
+import tempfile
+import time
 import requests
+import shutil
 import sys
 import urllib
 from urllib.error import (
@@ -80,7 +85,10 @@ def get_installed_apps(app_install_dir: Path) -> dict[str, tuple[int, int]]:
             and (item / "__init__.py").exists()
         ):
             app_name = item.name
-            api_version = get_api_version(app_name=app_name, app_install_dir=app_install_dir)
+            api_version = get_api_version(
+                app_name=app_name,
+                app_install_dir=app_install_dir
+            )
             if api_version is not None:
                 apps[app_name] = api_version
 
@@ -90,7 +98,6 @@ def get_installed_apps(app_install_dir: Path) -> dict[str, tuple[int, int]]:
 
 def find_latest_hbase_for_api_major(api_major: str = "") -> dict[str, int | str] | None:
     """Find latest hbase package for specific API major version (any minor/patch)"""
-    print("find latest hbase version")
 
     # Get all releases
     url = "https://api.github.com/repos/herlegon/hbase/releases"
@@ -164,7 +171,7 @@ def is_github_alive() -> bool:
 
 
 def download_file(url: str, filepath: Path) -> bool:
-    print(f"Downloading from {url}...")
+    print(f"Downloading from {url}")
     try:
         response: client.HTTPResponse
         with urllib.request.urlopen(url) as response:
@@ -234,3 +241,185 @@ def extract_filtered_lib(archive_path: Path, hbase_dir: Path):
                 print(f"Extracted {member.name} to {hbase_dir}")
 
 
+def remove_restart_iter(args) -> list[str]:
+    # Create a new list to store the filtered arguments
+    filtered_args = []
+
+    i = 0
+    while i < len(args):
+        # Look for '--restart-iter' and remove it along with the next number
+        if args[i] == '--restart-iter' and i + 1 < len(args) and args[i + 1].isdigit():
+            i += 2  # Skip the '--restart-iter' and its following number
+        else:
+            filtered_args.append(args[i])
+            i += 1
+
+    return filtered_args
+
+
+class _FSM(Enum):
+    INIT = 'init'
+    UPDATE_HBASE = 'update_hbase'
+    INSTALL_APP = 'install_app'
+    UPDATE_APP = 'update_app'
+    ENDED = 'ended'
+
+
+def fsm(
+    app: str,
+    app_install_dir: Path,
+    fe_api_version: tuple[int, int],
+    hbase_dir: Path,
+    hwss_dir: Path,
+    devmode: bool = False,
+) -> bool:
+
+    restart: bool = False
+    fsm_state = _FSM.INIT
+    while fsm_state != _FSM.ENDED:
+
+        if fsm_state == _FSM.INIT:
+            # Compare frontend api version vs backend
+            be_api_version = get_api_version(
+                app,
+                app_install_dir=hwss_dir.parent if app == "hwss" else app_install_dir
+            )
+            print(f"{app}: be_api_version: {be_api_version}")
+            print(f"{app}: fe_api_version: {fe_api_version}")
+            if be_api_version is None:
+                # Backend for the application is not installed yet,
+                # start the hwss, let's first update it
+                fsm_state = _FSM.UPDATE_HBASE
+                continue
+
+            elif fe_api_version is None:
+                # Not specified, because the backend is not installed
+                # use current api
+                fsm_state = _FSM.ENDED
+                if devmode:
+                    fsm_state = _FSM.UPDATE_HBASE
+
+            elif fe_api_version == be_api_version:
+                # Installed with same API version, no need to update
+                # neither the bootstrap&hinstall, nor the appli
+                fsm_state = _FSM.ENDED
+
+            # Not compatible API
+            elif fe_api_version[0] > be_api_version[0]:
+                # Force update the backend to match frontend
+                # It will automatically update the bootstrap if required
+                fsm_state = _FSM.UPDATE_HBASE
+
+            elif fe_api_version[0] < be_api_version[0]:
+                # The user must install latest frontend version
+                fsm_state = _FSM.ENDED
+                print("Not compatible API version. Update frontend.")
+                sys.exit(-2)
+
+            else:
+                print("unknow event")
+                sys.exit(-1)
+
+
+        elif fsm_state == _FSM.UPDATE_APP:
+            # (?)
+            # remove the __init__ to force reinstall
+            fsm_state = _FSM.INSTALL_APP
+
+
+        elif fsm_state == _FSM.UPDATE_HBASE:
+
+            # First, get the api version of the hbase (bootstrap + hwss + hinstall)
+            hbase_api_version = get_api_version(
+                app_name="hwss",
+                app_install_dir=hwss_dir.parent
+            )
+            if hbase_api_version is None:
+                # No webserver
+                print("no hbase installed, huh?")
+
+            # Get latest version of the same major version as the app
+            # hbase-1.2.5.tar.gz
+            # hbase-x.y.z.tar.gz
+            #     ↑ ↑ ↑
+            #     │ │ └─ Package version (patch)
+            #     │ └─── API minor version
+            #     └───── API major version
+            # Content:
+            #   - hwss
+            #   - hinstall (backend)
+            #   - bootstrap
+            retry = 3
+            hbase_release: dict | None = None
+            while retry:
+                if fe_api_version:
+                    fe_major_api_version = fe_api_version[0]
+                    hbase_release = find_latest_hbase_for_api_major(api_major=fe_major_api_version)
+                else:
+                    # Use the latest release
+                    hbase_release = find_latest_hbase_for_api_major(api_major="")
+
+                if hbase_release is not None:
+                    break
+
+                time.sleep(1)
+                if not is_github_alive():
+                    print(f"GitHub API is not reachable")
+                    sys.exit(-1)
+                retry -= 1
+
+            if hbase_release is None:
+                print("error: release not found")
+                sys.exit(-1)
+
+            # Download and extract archive
+            archive_url = hbase_release['url']
+            archive_filename = os.path.basename(archive_url)
+
+            with tempfile.TemporaryDirectory() as temp_dir:
+                temp_dir_path = Path(temp_dir)
+                temp_dir_path.mkdir(exist_ok=True)
+                archive_path = temp_dir_path / archive_filename
+
+                # Verify if the destination path is accessible
+                if not temp_dir_path.exists():
+                    print(f"Temporary directory {temp_dir_path} does not exist.")
+                    return False
+
+                # Download
+                retry: int = 3
+                success: bool = False
+                while not success and retry:
+                    try:
+                        success = download_file(url=archive_url, filepath=archive_path)
+                    except:
+                        print(f"retry")
+                        pass
+                if not success:
+                    print(f"Failed to download {archive_url}")
+                    sys.exit(-1)
+
+                # Remove the modules that will be installed: hwss, hinstall
+                for module in ("hwss", "hinstall"):
+                    module_dir = hbase_dir / "modules" / module
+                    try:
+                        shutil.rmtree(module_dir)
+                    except:
+                        pass
+
+                # Extract
+                try:
+                    extract_filtered_lib(archive_path=archive_path, hbase_dir=hbase_dir)
+                except:
+                    print("failed to install hbase")
+                    sys.exit(-1)
+
+                # Because a new version has been installed, restart
+                restart = True
+                fsm_state = _FSM.ENDED
+
+
+        elif fsm_state == _FSM.ENDED:
+            break
+
+    return restart
