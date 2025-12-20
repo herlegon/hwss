@@ -280,7 +280,7 @@ class _FSM(Enum):
 def fsm(
     app: str,
     app_install_dir: Path,
-    fe_api_version: tuple[int, int],
+    fe_api_version: tuple[int, int] | None,
     hbase_dir: Path,
     hwss_dir: Path,
     devmode: bool = False,
@@ -298,14 +298,21 @@ def fsm(
             )
             logger.info(f"{app}: be_api_version: {be_api_version}")
             logger.info(f"{app}: fe_api_version: {fe_api_version}")
-            if be_api_version is None:
+
+            is_hbase_installed = all([
+                Path(hbase_dir / "modules" / m / "__init__.py").exists()
+                for m in ('hwss', 'hinstall')
+            ])
+            logger.info(f"hbase installed: {is_hbase_installed}")
+
+            if not is_hbase_installed or be_api_version is None:
                 # Backend for the application is not installed yet,
                 # start the hwss, let's first update it
                 fsm_state = _FSM.UPDATE_HBASE
                 continue
 
             elif fe_api_version is None:
-                # Not specified, because the backend is not installed
+                # Not specified, because the frontend is not installed
                 # use current api
                 fsm_state = _FSM.ENDED
                 if devmode:

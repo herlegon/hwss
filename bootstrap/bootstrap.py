@@ -106,6 +106,7 @@ def main():
     # if not provided, we will use the installed one.
     # if hbase not installed, use the latest available
     fe_api_version_str: str = args.api_version
+    fe_api_version: tuple[int, int] | None = None
     if not fe_api_version_str:
         fe_api_version = None
 
@@ -135,24 +136,24 @@ def main():
     logger.info(f"  hwss: {hwss_dir}")
     logger.info(f"  FrontEnd API version: {fe_api_version}")
 
-    try:
-        restart = fsm(
-            app=app,
-            app_install_dir=app_install_dir,
-            fe_api_version=fe_api_version,
-            hbase_dir=hbase_dir,
-            hwss_dir=hwss_dir,
-            devmode=devmode,
-        )
-    except Exception as e:
-        logger.error(f"Exception while running fsm: {str(e)}")
-        sys.exit(1)
+    # try:
+    restart = fsm(
+        app=app,
+        app_install_dir=app_install_dir,
+        fe_api_version=fe_api_version,
+        hbase_dir=hbase_dir,
+        hwss_dir=hwss_dir,
+        devmode=devmode,
+    )
+    # except Exception as e:
+    #     logger.error(f"Exception while running fsm: {str(e)}")
+    #     sys.exit(1)
 
     # Restart or launch the webserver
     if restart:
         # Preserve original arguments when restarting
         # TODO: this has to be handled by the frontend
-        # if devmode, it's safe to restart
+        # if devmode, it's safe to restart[1:]
         executable = sys.executable
         cmd_args = (
             [executable, sys.argv[0]]
@@ -166,10 +167,11 @@ def main():
 
     else:
         if not app_entry.exists():
-            logger.error(f"\nERROR: Server file not found: {app_entry}")
+            logger.error(f"Server file not found: {app_entry}")
             sys.exit(1)
 
         # Use run_path, and convert Path to str for compatibility
+        logger.info(f"Starting app with args: {sys.argv[1:]}")
         runpy.run_path(str(app_entry), run_name='__main__')
 
 

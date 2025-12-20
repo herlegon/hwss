@@ -15,13 +15,19 @@ import multiprocessing as mp
 from multiprocessing.synchronize import Event
 from typing import Literal
 
+pprint(sys.path)
+dev_dir: str = str(Path(__file__).resolve().parent.parent / "hinstall")
+# slog.warning(f"Import hinstall from dev directory: {dev_dir}")
+# sys.path.append(dev_dir)
+print(dev_dir)
 try:
     from hinstall import __version__
 
 except:
     dev_dir: str = str(Path(__file__).resolve().parent.parent / "hinstall")
     # slog.warning(f"Import hinstall from dev directory: {dev_dir}")
-    sys.path.append(dev_dir)
+    # sys.path.append(dev_dir)
+    print(dev_dir)
 
 try:
     from hinstall import (
