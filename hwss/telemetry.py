@@ -9,13 +9,13 @@ from websockets import (
 )
 from hytils import red, yellow
 from utils import send_json
-from logger import slog
+from .logger import slog
 import json
 from websockets import (
     ServerConnection,
     ConnectionClosed,
 )
-from logger import slog
+from .logger import slog
 
 
 TELEMETRY_RATE: float = 1.5

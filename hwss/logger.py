@@ -6,7 +6,7 @@ import queue
 import sys
 from typing import Literal
 
-from api import EventMessage, MessageType, InstallProgress
+from .api import EventMessage, MessageType, InstallProgress
 import multiprocessing as mp
 
 from hytils import red

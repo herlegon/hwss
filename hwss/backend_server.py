@@ -4,7 +4,7 @@ import sys
 import logging
 import logging.handlers
 
-from logger import setup_server_logging, setup_queue_listener
+from .logger import setup_server_logging, setup_queue_listener
 import logging
 from websockets import (
     ServerConnection,
@@ -16,7 +16,7 @@ ws_logger.setLevel(logging.WARNING)
 
 import asyncio
 
-from client_connection import ClientConnectionHandler
+from .client_connection import ClientConnectionHandler
 from hytils import red, yellow
 import multiprocessing as mp
 import uuid

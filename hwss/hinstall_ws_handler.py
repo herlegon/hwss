@@ -4,7 +4,7 @@ WebSocket logging handler for forwarding hinstall log messages to WebSocket clie
 import logging
 import re
 from typing import Callable, Optional
-from api import EventMessage, InstallProgress
+from .api import EventMessage, InstallProgress
 
 
 class HInstallWebSocketHandler(logging.Handler):

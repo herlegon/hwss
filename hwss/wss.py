@@ -1,18 +1,16 @@
-import os
-from pathlib import Path
+from pprint import pprint
 import sys
 import logging
+import multiprocessing as mp
 
-sys.path.append(str(Path(__file__).resolve().parent))
-sys.path.append(str(Path(__file__).resolve().parent.parent))
+pprint(sys.path)
 
 import asyncio
 asyncio_logger = logging.getLogger("asyncio")
 asyncio_logger.setLevel(logging.WARNING)
 
-import multiprocessing as mp
+from hinstall import __version__
 from .backend_server import start_wss, main_log
-
 
 if __name__ == "__main__":
     mp.set_start_method('spawn')

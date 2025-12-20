@@ -151,3 +151,28 @@ A:/
         └── bootstrap_helpers.py
 ```
 
+
+
+destination directories and files
+```
+python/
+├── python.exe
+├── ...
+├── bootstrap.py
+├── bootstrap_helpers.py
+├── modules/
+│   ├── hwss/
+│   │   ├── __init__.py
+│   │   ├── api.py
+│   │   ├── wss.py
+│   │   ├── logger.py
+│   │   ├── backend_server.py
+│   │   ...
+│   │
+│   ├── hinstall/
+│   │   ├── __init__.py
+│   │   ├── logger.py
+│   │   ├── ext_package.py
+│   │   ├── py_package.py     <- needs to import hwss/api.py
+│   │   ├── ...
+```

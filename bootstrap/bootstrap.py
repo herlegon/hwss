@@ -171,8 +171,16 @@ def main():
             sys.exit(1)
 
         # Use run_path, and convert Path to str for compatibility
+        logger.info(f"Starting app: {app_entry}")
         logger.info(f"Starting app with args: {sys.argv[1:]}")
-        runpy.run_path(str(app_entry), run_name='__main__')
+
+        # Only add modules/ to sys.path (not hwss/)
+        modules_dir = app_entry.parent.parent  # modules/
+        if str(modules_dir) not in sys.path:
+            sys.path.insert(0, str(modules_dir))
+        runpy.run_module('hwss.wss', run_name='__main__')
+
+        # runpy.run_path(str(app_entry), run_name='__main__')
 
 
 if __name__ == "__main__":

@@ -9,50 +9,31 @@ import signal
 import sys
 import time
 from hytils import lightcyan, lightgreen, purple, red, yellow
-from logger import setup_worker_logger, slog
-from api import InstallProgress, InstallTaskResult, WorkerResponse
+from .logger import setup_worker_logger, slog
 import multiprocessing as mp
 from multiprocessing.synchronize import Event
 from typing import Literal
 
-pprint(sys.path)
-dev_dir: str = str(Path(__file__).resolve().parent.parent / "hinstall")
-# slog.warning(f"Import hinstall from dev directory: {dev_dir}")
-# sys.path.append(dev_dir)
-print(dev_dir)
-try:
-    from hinstall import __version__
+from hinstall import (
+    __version__,
+    ExtPackages,
+    PyPackages,
+    PyPackage,
+    download_install_ext_packages,
+    g_backend_dirs,
+    parse_config_,
+    clean_invalid_distributions,
+    get_py_package_versions,
+)
 
-except:
-    dev_dir: str = str(Path(__file__).resolve().parent.parent / "hinstall")
-    # slog.warning(f"Import hinstall from dev directory: {dev_dir}")
-    # sys.path.append(dev_dir)
-    print(dev_dir)
-
-try:
-    from hinstall import (
-        ExtPackages,
-        PyPackages,
-        PyPackage,
-        download_install_ext_packages,
-        g_backend_dirs,
-        parse_config_,
-        clean_invalid_distributions,
-        get_py_package_versions,
-    )
-except Exception as e:
-    print(red(f"Failed to import hinstall package: {str(e)}"))
-
-
-
-
-from api import (
+from .api import (
     EventMessage,
     InstallTaskId,
     ParseTask,
     InstallTask,
     ResponseMessage,
-    MessageType,
+    InstallProgress,
+    InstallTaskResult,
 )
 
 

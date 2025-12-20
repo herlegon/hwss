@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import multiprocessing as mp
 import os
@@ -9,7 +8,7 @@ from pprint import pprint
 import queue
 import sys
 import websockets
-from api import (
+from .api import (
     RequestMessage,
     ResponseMessage,
     WssIdentity,
@@ -18,7 +17,7 @@ from api import (
     PackageVersions,
     SysCap,
 )
-from install_worker import InstallWorker
+from .install_worker import InstallWorker
 from hytils import lightblue, lightcyan, purple, red, yellow
 from websockets import (
     ServerConnection,
@@ -27,8 +26,7 @@ from websockets import (
     ConnectionClosedOK,
     ConnectionClosedError,
 )
-import logger
-from logger import setup_client_logger
+from .logger import setup_client_logger
 from typing import TYPE_CHECKING
 from hinstall import (
     get_py_package_versions,
