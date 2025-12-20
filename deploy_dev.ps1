@@ -6,10 +6,26 @@ $modulesDir = "$pythonDir\modules"
 
 Write-Host "Deploying in DEV mode with symlinks..." -ForegroundColor Cyan
 
-# Bootstrap files (still copy these)
-Write-Host "Deploying bootstrap files..." -ForegroundColor Yellow
+# Deploy bootstrap files with symlinks
+Write-Host "Setting up bootstrap symlinks..." -ForegroundColor Yellow
 Remove-Item "$pythonDir\bootstrap_*.pyd" -Force -ErrorAction SilentlyContinue
-Copy-Item ".\bootstrap\*.py" -Destination $pythonDir -Force
+
+# Get all bootstrap_*.py files in the bootstrap directory
+$bootstrapFiles = Get-ChildItem ".\bootstrap\bootstrap_*.py"
+foreach ($file in $bootstrapFiles) {
+    $target = "$pythonDir\$($file.Name)"
+
+    if (Test-Path $target) {
+        if ((Get-Item $target).Attributes -band [System.IO.FileAttributes]::ReparsePoint) {
+            (Get-Item $target).Delete()
+        } else {
+            Remove-Item $target -Force
+        }
+    }
+
+    New-Item -ItemType SymbolicLink -Path $target -Target $file.FullName -Force | Out-Null
+    Write-Host "  Created symlink: $($file.Name) -> $($file.FullName)" -ForegroundColor Green
+}
 
 # Deploy hwss with symlink
 Write-Host "Setting up hwss symlink..." -ForegroundColor Yellow

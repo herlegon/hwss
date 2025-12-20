@@ -82,13 +82,11 @@ def main():
     hwss_dir = hbase_dir / "modules" / "hwss"
     if devmode:
         # Use the local repos
-        logger.info("devmode")
         app_install_dir = this_dir.parent.parent
         hwss_dir = this_dir.parent / "hwss"
         hbase_dir = get_install_dir() / "python"
 
     elif args.default_install_dir:
-        logger.info("User defined installation path (debug only)")
         org_install_dir = get_install_dir()
         app_install_dir = org_install_dir
         hbase_dir = org_install_dir / "python"
@@ -129,7 +127,7 @@ def main():
             logger.info("No servers found. Packages may not be installed yet.")
         return
 
-    logger.info(f"Bootstrap starting: app={app}")
+    logger.info(f"Bootstrap starting: app={app}, devmode={devmode}")
     logger.info("Installation directories:")
     logger.info(f"  app_install_dir: {app_install_dir}")
     logger.info(f"  hbase: {hbase_dir}")
@@ -138,7 +136,7 @@ def main():
 
     # try:
     restart = fsm(
-        app=app,
+        app_name=app,
         app_install_dir=app_install_dir,
         fe_api_version=fe_api_version,
         hbase_dir=hbase_dir,

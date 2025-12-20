@@ -47,33 +47,51 @@ def get_install_dir(
     return base.resolve() / organization
 
 
-def get_api_version(
+def get_versions(
     app_name: str,
-    app_install_dir: Path
-) -> tuple[int, int] | None:
-    """Extract __api_version__ from app's __init__.py
-    """
-    # Look for __api_version__ = "x.y" or __api_version__ = 'x.y'
-    # with X major and Y minor: major is non backward compatible
-    # Single line only, case-sensitive
-    init_file: Path = app_install_dir / app_name / "__init__.py"
-    logger.debug(f"search {app_name} version {init_file}")
+    app_install_dir: Path,
+    hwss_dir: Path,
+) -> tuple[tuple[int,...] | None, tuple[int, int] | None, tuple[int, int] | None]:
+    """Returns application version, app api version and hwss api version"""
+    app_version = None
+    app_api_version = None
+    hwss_api_version = None
 
-    if not init_file.exists():
-        return None
+    app_version_fp: Path = app_install_dir / app_name / "__init__.py"
+    logger.debug(f"search {app_name} versions in {app_version_fp}")
+    hwss_api_version_fp: Path = hwss_dir.parent / app_name / "__init__.py"
+    logger.debug(f"search {app_name} version in {app_version_fp}")
 
-    try:
-        content = init_file.read_text(encoding='utf-8')
-        for line in content.split('\n'):
-            if line.strip().startswith('__api_version__') and '=' in line:
-                value = line.split('=', 1)[1].strip().strip('"\'')
-                if match := re.search(r"(\d+)\.(\d+)", value):
-                    return (int(match.group(1)), int(match.group(2)))
+    for version_fp in (app_version_fp, hwss_api_version_fp):
+        if not version_fp.exists():
+            continue
+        try:
+            content = version_fp.read_text(encoding='utf-8')
+            for line in content.split('\n'):
+                if line.strip().startswith('__version__') and '=' in line:
+                    value = line.split('=', 1)[1].strip().strip('"\'')
+                    # Match major.minor (x.y) or major.minor.patch (x.y.z) or just major (x)
+                    if match := re.search(r"(\d+)(?:\.(\d+))?(?:\.(\d+))?", value):
+                        major = int(match.group(1))
+                        minor = int(match.group(2)) if match.group(2) else 0
+                        patch = int(match.group(3)) if match.group(3) else 0
+                        app_version = (major, minor, patch)
 
-    except Exception as e:
-        logger.warning(f"Warning: Could not read version from {init_file}: {e}")
-        return None
+                if line.strip().startswith('__api_version__') and '=' in line:
+                    value = line.split('=', 1)[1].strip().strip('"\'')
+                    if match := re.search(r"(\d+)\.(\d+)", value):
+                        major = int(match.group(1))
+                        minor = int(match.group(2))
+                        _api_version = (major, minor)
+                        if version_fp == app_version_fp:
+                            app_api_version = _api_version
+                        elif version_fp == hwss_api_version_fp:
+                            hwss_api_version = _api_version
 
+        except Exception as e:
+            logger.warning(f"Warning: Could not read version from {version_fp}: {e}")
+
+    return app_version, app_api_version, hwss_api_version
 
 
 def get_installed_apps(app_install_dir: Path) -> dict[str, tuple[int, int]]:
@@ -301,7 +319,8 @@ def extract_filtered_lib(
         sys.exit(-1)
 
     # Check if we're in dev mode (symlink detected) and not forcing prod install
-    is_dev_mode: bool = hbase_dir.is_symlink() and not force_prod
+    bootstrap_script: Path = hbase_dir / "bootstrap.py"
+    is_dev_mode: bool = bootstrap_script.is_symlink() and not force_prod
     if is_dev_mode:
         # Extract to a separate binaries directory instead
         python_root = hbase_dir.parent.parent
@@ -362,7 +381,7 @@ class _FSM(Enum):
 
 
 def fsm(
-    app: str,
+    app_name: str,
     app_install_dir: Path,
     fe_api_version: tuple[int, int] | None,
     hbase_dir: Path,
@@ -376,12 +395,14 @@ def fsm(
 
         if fsm_state == _FSM.INIT:
             # Compare frontend api version vs backend
-            be_api_version = get_api_version(
-                app,
-                app_install_dir=hwss_dir.parent if app == "hwss" else app_install_dir
+            app_version, be_api_version = read_versions(
+                app_name,
+                app_install_dir=app_install_dir,
+                hwss_dir=hwss_dir
             )
-            logger.info(f"{app}: be_api_version: {be_api_version}")
-            logger.info(f"{app}: fe_api_version: {fe_api_version}")
+            logger.info(f"{app_name}: version: {be_api_version}")
+            logger.info(f"{app_name}: fe_api_version: {fe_api_version}")
+            logger.info(f"{app_name}: fe_api_version: {fe_api_version}")
 
             is_hbase_installed = all([
                 Path(hbase_dir / "modules" / m / "__init__.py").exists()
@@ -433,9 +454,10 @@ def fsm(
         elif fsm_state == _FSM.UPDATE_HBASE:
 
             # First, get the api version of the hbase (bootstrap + hwss + hinstall)
-            hbase_api_version = get_api_version(
-                app_name="hwss",
-                app_install_dir=hwss_dir.parent
+            hbase_api_version = get_versions(
+                app_name=app_name,
+                app_install_dir=app_install_dir,
+                hwss_dir=hwss_dir
             )
             if hbase_api_version is None:
                 # No webserver
@@ -512,7 +534,11 @@ def fsm(
 
                 # Extract
                 try:
-                    extract_filtered_lib(archive_path=archive_path, hbase_dir=hbase_dir)
+                    extract_filtered_lib(
+                        archive_path=archive_path,
+                        hbase_dir=hbase_dir,
+                        force_prod=not devmode
+                    )
                 except:
                     logger.error("failed to install hbase")
                     sys.exit(-1)
