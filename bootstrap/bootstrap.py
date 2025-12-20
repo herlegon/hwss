@@ -137,7 +137,7 @@ def main():
     # try:
     restart = fsm(
         app_name=app,
-        app_install_dir=app_install_dir,
+        app_install_dir=app_install_dir if app != 'hwss' else hwss_dir.parent,
         fe_api_version=fe_api_version,
         hbase_dir=hbase_dir,
         hwss_dir=hwss_dir,

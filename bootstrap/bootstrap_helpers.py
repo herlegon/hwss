@@ -10,13 +10,14 @@ import tarfile
 import tempfile
 import time
 import requests
-import shutil
 import sys
 import urllib
 from urllib.error import (
     URLError,
     HTTPError,
 )
+
+from hytils import red
 
 logger = logging.getLogger("bootstrap")
 
@@ -51,18 +52,35 @@ def get_versions(
     app_name: str,
     app_install_dir: Path,
     hwss_dir: Path,
-) -> tuple[tuple[int,...] | None, tuple[int, int] | None, tuple[int, int] | None]:
-    """Returns application version, app api version and hwss api version"""
-    app_version = None
+) -> tuple[tuple[int, int, int] | None, tuple[int, int, int] | None, tuple[int, int, int] | None]:
+    """Returns hbase_version, app_api_version, app_version
+        - hbase version:
+            x.y.z with
+                x = __api_version__ in hwss/api.py
+                y.z = __version__ in hinstall/api.py
+        - application API version
+            x.r.t = __api_version__ in app_install_dir/app/__init__.py
+        - application version
+            a.b.c = __version__ in app_install_dir/app/__init__.py
+
+        in bootstrap/hbase: we don't care of "r, t, a, b, c"
+        application versions are just for debug
+    """
+    hbase_version = None
+    api_version = None
+    hinstall_version = None
     app_api_version = None
-    hwss_api_version = None
+    app_version = None
 
     app_version_fp: Path = app_install_dir / app_name / "__init__.py"
-    logger.debug(f"search {app_name} versions in {app_version_fp}")
-    hwss_api_version_fp: Path = hwss_dir.parent / app_name / "__init__.py"
-    logger.debug(f"search {app_name} version in {app_version_fp}")
+    print(f"search {app_name} versions in {app_version_fp}")
 
-    for version_fp in (app_version_fp, hwss_api_version_fp):
+    api_version_fp: Path = hwss_dir / "api.py"
+    hinstall_version_fp: Path = hwss_dir.parent / "hinstall" / "__init__.py"
+    print(f"search api version in {api_version_fp}")
+    print(f"search hinstall version in {hinstall_version_fp}")
+
+    for version_fp in (api_version_fp, hinstall_version_fp, app_version_fp):
         if not version_fp.exists():
             continue
         try:
@@ -70,28 +88,35 @@ def get_versions(
             for line in content.split('\n'):
                 if line.strip().startswith('__version__') and '=' in line:
                     value = line.split('=', 1)[1].strip().strip('"\'')
-                    # Match major.minor (x.y) or major.minor.patch (x.y.z) or just major (x)
                     if match := re.search(r"(\d+)(?:\.(\d+))?(?:\.(\d+))?", value):
                         major = int(match.group(1))
                         minor = int(match.group(2)) if match.group(2) else 0
                         patch = int(match.group(3)) if match.group(3) else 0
-                        app_version = (major, minor, patch)
+                        if version_fp == hinstall_version_fp:
+                            hinstall_version = (major, minor)
+                        elif version_fp == app_version_fp:
+                            app_version = (major, minor, patch)
 
                 if line.strip().startswith('__api_version__') and '=' in line:
                     value = line.split('=', 1)[1].strip().strip('"\'')
-                    if match := re.search(r"(\d+)\.(\d+)", value):
+                    if match := re.search(r"(\d+)(?:\.(\d+))?(?:\.(\d+))?", value):
                         major = int(match.group(1))
-                        minor = int(match.group(2))
-                        _api_version = (major, minor)
-                        if version_fp == app_version_fp:
-                            app_api_version = _api_version
-                        elif version_fp == hwss_api_version_fp:
-                            hwss_api_version = _api_version
+                        minor = int(match.group(2)) if match.group(2) else 0
+                        patch = int(match.group(3)) if match.group(3) else 0
+                        if version_fp == api_version_fp:
+                            api_version = major
+                        elif version_fp == app_version_fp:
+                            app_api_version = (major, minor, patch)
 
         except Exception as e:
-            logger.warning(f"Warning: Could not read version from {version_fp}: {e}")
+            print(f"Warning: Could not read version from {version_fp}: {e}")
 
-    return app_version, app_api_version, hwss_api_version
+    if hinstall_version is not None and api_version is not None:
+        hbase_version = (api_version, hinstall_version[0], hinstall_version[1])
+
+    return hbase_version, app_api_version, app_version
+
+
 
 
 def get_installed_apps(app_install_dir: Path) -> dict[str, tuple[int, int]]:
@@ -107,12 +132,13 @@ def get_installed_apps(app_install_dir: Path) -> dict[str, tuple[int, int]]:
             and (item / "__init__.py").exists()
         ):
             app_name = item.name
-            api_version = get_api_version(
+            hbase_version, app_api_version, app_version = get_versions(
                 app_name=app_name,
-                app_install_dir=app_install_dir
+                app_install_dir=app_install_dir,
+                hwss_dir=app_install_dir / "python" / "Modules" / "hwss",
             )
-            if api_version is not None:
-                apps[app_name] = api_version
+            if app_version is not None:
+                apps[app_name] = (hbase_version, app_api_version, app_version)
 
     return apps
 
@@ -223,6 +249,7 @@ def download_file(url: str, filepath: Path) -> bool:
         logger.error(f"An unexpected error occurred: {e}")
         return False
 
+    logger.info(f"Successfully downloaded")
     return True
 
 
@@ -323,8 +350,7 @@ def extract_filtered_lib(
     is_dev_mode: bool = bootstrap_script.is_symlink() and not force_prod
     if is_dev_mode:
         # Extract to a separate binaries directory instead
-        python_root = hbase_dir.parent.parent
-        extraction_dir = python_root / "Modules_prod" / hbase_dir.name
+        extraction_dir = hbase_dir / "tmp"
         extraction_dir.mkdir(parents=True, exist_ok=True)
         logger.info(f"Dev mode detected (symlink): extracting binaries to {extraction_dir}")
 
@@ -342,7 +368,6 @@ def extract_filtered_lib(
     # Extract files, skipping other platform-specific files
     with tarfile.open(archive_path, 'r:gz') as tar_file:
         for member in tar_file.getmembers():
-            print(member)
             # Skip files that match platform extensions of other platforms
             skip: bool = False
             for ext in platform_files.values():
@@ -386,23 +411,24 @@ def fsm(
     hwss_dir: Path,
     devmode: bool = False,
 ) -> bool:
-
     restart: bool = False
+
+    # First, get the api version of the hbase (bootstrap + hwss + hinstall)
+    app_version, app_api_version, hbase_api_version = get_versions(
+        app_name,
+        app_install_dir=app_install_dir,
+        hwss_dir=hwss_dir
+    )
+    logger.info(f"{app_name}: hbase API version: {hbase_api_version}")
+    logger.info(f"{app_name}: requested API version by frontend: {fe_api_version}")
+    logger.info(f"{app_name}: installed API version: {app_api_version}")
+    logger.info(f"{app_name}: application version: {app_version}")
+
+
     fsm_state = _FSM.INIT
     while fsm_state != _FSM.ENDED:
 
         if fsm_state == _FSM.INIT:
-            # Compare frontend api version vs backend
-            app_version, app_api_version, hbase_api_version = get_versions(
-                app_name,
-                app_install_dir=app_install_dir,
-                hwss_dir=hwss_dir
-            )
-            logger.info(f"{app_name}: hbase API version: {hbase_api_version}")
-            logger.info(f"{app_name}: requested API version by frontend: {fe_api_version}")
-            logger.info(f"{app_name}: installed API version: {app_api_version}")
-            logger.info(f"{app_name}: application version: {app_version}")
-
             is_hbase_installed = all([
                 Path(hbase_dir / "modules" / m / "__init__.py").exists()
                 for m in ('hwss', 'hinstall')
@@ -431,23 +457,12 @@ def fsm(
 
             if fe_api_version is None:
                 # whatever, use the latest hwss version
-                logger.info(f"Not API version specified. Update to the latest")
+                logger.info(f"No frontend API version specified. Update to the latest")
                 fsm_state = _FSM.UPDATE_HBASE
                 continue
 
 
         elif fsm_state == _FSM.UPDATE_HBASE:
-
-            # First, get the api version of the hbase (bootstrap + hwss + hinstall)
-            hbase_api_version = get_versions(
-                app_name=app_name,
-                app_install_dir=app_install_dir,
-                hwss_dir=hwss_dir
-            )
-            if hbase_api_version is None:
-                # No webserver
-                logger.warning("no hbase installed, huh?")
-
             # Get latest version of the same major version as the app
             # hbase-1.2.5.tar.gz
             # hbase-x.y.z.tar.gz
@@ -480,6 +495,12 @@ def fsm(
                     logger.error(f"GitHub API is not reachable")
                     sys.exit(-1)
                 retry -= 1
+
+            print(red("hbase_release"))
+            pprint(hbase_release)
+            print(hbase_api_version)
+            sys.exit()
+
 
             if hbase_release is None:
                 logger.error("hbase release not found")

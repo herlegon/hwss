@@ -3,7 +3,7 @@ from typing import Literal
 from dataclasses import asdict, dataclass
 from typing import Any, Optional
 
-__api_version__ = "0.1"
+__api_version__ = "1"
 
 RequestType = Literal[
     'heartbeat',
