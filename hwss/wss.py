@@ -2,9 +2,6 @@ from pprint import pprint
 import sys
 import logging
 import multiprocessing as mp
-
-pprint(sys.path)
-
 import asyncio
 asyncio_logger = logging.getLogger("asyncio")
 asyncio_logger.setLevel(logging.WARNING)
