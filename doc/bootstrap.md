@@ -1,3 +1,20 @@
+# Scenario
+
+- development: deploy_dev.ps1
+    * command:
+    using appdata `python.exe bootstrap.py --devmode`
+    * uses symlinks to modify the source code
+    * when downloading a new version, do not overwrite the source but extract to `Modules_prod`, no need for a specific arg
+
+- prod:
+
+
+
+
+
+
+
+
 ```
 
 ## GitHub Release Structure

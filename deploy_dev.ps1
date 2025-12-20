@@ -41,4 +41,4 @@ Write-Host "  Created symlink: $hinstallTarget -> A:\hinstall\hinstall" -Foregro
 
 # Start server
 Write-Host "`nStarting server..." -ForegroundColor Cyan
-& "$pythonDir\python.exe" "$pythonDir\bootstrap.py"
+& "$pythonDir\python.exe" "$pythonDir\bootstrap.py" "--devmode"

@@ -209,14 +209,77 @@ def download_file(url: str, filepath: Path) -> bool:
 
 
 
-def extract_filtered_lib(archive_path: Path, hbase_dir: Path):
+def prepare_bootstrap_for_fresh_install(python_dir: Path):
+    """
+    Check if bootstrap files are symlinks
+    and remove them to prepare for fresh installation.
+    """
+    if not python_dir.exists():
+        logger.warning(f"Python directory doesn't exist: {python_dir}")
+        return
+
+    # Find all files starting with 'bootstrap_'
+    symlinks_found = []
+    for file_path in python_dir.iterdir():
+        if file_path.is_file() and file_path.name.startswith('bootstrap_'):
+            if file_path.is_symlink():
+                symlinks_found.append(file_path)
+
+    if symlinks_found:
+        logger.info(f"Dev mode bootstrap detected: found {len(symlinks_found)} symlinked bootstrap file(s)")
+        for symlink in symlinks_found:
+            logger.info(f"  Removing symlink: {symlink.name} -> {symlink.resolve()}")
+            symlink.unlink()
+    else:
+        logger.info("No bootstrap symlinks detected.")
+
+
+
+def prepare_modules_for_fresh_install(modules_dir: Path):
+    """
+    Remove module symlinks and prepare directories for fresh installation.
+    This allows switching from dev mode to prod mode.
+    """
+    if not modules_dir.exists():
+        logger.info(f"Modules directory doesn't exist, creating: {modules_dir}")
+        modules_dir.mkdir(parents=True, exist_ok=True)
+        return
+
+    # Check for symlinks in modules directory
+    symlinks_found = []
+    for item in modules_dir.iterdir():
+        if item.is_symlink():
+            symlinks_found.append(item)
+
+    if symlinks_found:
+        logger.info(f"Dev mode detected: found {len(symlinks_found)} module symlink(s)")
+        for symlink in symlinks_found:
+            logger.info(f"  Removing symlink: {symlink.name} -> {symlink.resolve()}")
+            symlink.unlink()
+    else:
+        logger.info("No module symlinks detected, proceeding with installation.")
+
+
+
+def prepare_for_fresh_install(python_dir: Path):
+    """
+    Complete preparation for fresh installation:
+    removes both bootstrap and module symlinks.
+    """
+    logger.info("Preparing for fresh installation...")
+    prepare_bootstrap_for_fresh_install(python_dir)
+    prepare_modules_for_fresh_install(python_dir / "modules")
+    logger.info("Preparation complete. Ready for fresh installation.")
+
+
+def extract_filtered_lib(
+    archive_path: Path,
+    hbase_dir: Path,
+    force_prod: bool = False
+):
     """
     Extract files from the tar.gz archive to the target directory,
     skipping files that are specific to other platforms.
-
-    Args:
-        archive_path (Path): Path to the tar.gz archive.
-        hbase_dir (Path): Directory to extract the files to.
     """
     # Define platform-specific file extensions
     platform_files = {
@@ -237,13 +300,12 @@ def extract_filtered_lib(archive_path: Path, hbase_dir: Path):
         logger.error(f"Unsupported platform: {platform}")
         sys.exit(-1)
 
-    # Check if we're in dev mode (symlink detected)
-    is_dev_mode = hbase_dir.is_symlink()
-
+    # Check if we're in dev mode (symlink detected) and not forcing prod install
+    is_dev_mode: bool = hbase_dir.is_symlink() and not force_prod
     if is_dev_mode:
         # Extract to a separate binaries directory instead
-        python_root = hbase_dir.parent.parent  # modules/hwss -> modules -> python
-        extraction_dir = python_root / "lib_binaries" / hbase_dir.name
+        python_root = hbase_dir.parent.parent
+        extraction_dir = python_root / "Modules_prod" / hbase_dir.name
         extraction_dir.mkdir(parents=True, exist_ok=True)
         logger.info(f"Dev mode detected (symlink): extracting binaries to {extraction_dir}")
 
@@ -251,18 +313,18 @@ def extract_filtered_lib(archive_path: Path, hbase_dir: Path):
         if str(extraction_dir.parent) not in sys.path:
             sys.path.insert(0, str(extraction_dir.parent))
             logger.debug(f"Added {extraction_dir.parent} to sys.path")
+
     else:
         # Prod mode: extract directly to the target
         extraction_dir = hbase_dir
+        extraction_dir.mkdir(parents=True, exist_ok=True)
         logger.info(f"Prod mode: extracting to {extraction_dir}")
 
-
     # Extract files, skipping other platform-specific files
-    extracted_count = 0
     with tarfile.open(archive_path, 'r:gz') as tar_file:
         for member in tar_file.getmembers():
             # Skip files that match platform extensions of other platforms
-            skip = False
+            skip: bool = False
             for ext in platform_files.values():
                 if ext != current_ext and member.name.endswith(ext):
                     skip = True
@@ -271,10 +333,7 @@ def extract_filtered_lib(archive_path: Path, hbase_dir: Path):
 
             if not skip:
                 tar_file.extract(member, path=extraction_dir)
-                logger.debug(f"Extracted {member.name} to {extraction_dir}")
                 extracted_count += 1
-
-    logger.info(f"Extracted {extracted_count} files for platform: {platform}")
 
 
 
