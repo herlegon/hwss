@@ -237,7 +237,28 @@ def extract_filtered_lib(archive_path: Path, hbase_dir: Path):
         logger.error(f"Unsupported platform: {platform}")
         sys.exit(-1)
 
+    # Check if we're in dev mode (symlink detected)
+    is_dev_mode = hbase_dir.is_symlink()
+
+    if is_dev_mode:
+        # Extract to a separate binaries directory instead
+        python_root = hbase_dir.parent.parent  # modules/hwss -> modules -> python
+        extraction_dir = python_root / "lib_binaries" / hbase_dir.name
+        extraction_dir.mkdir(parents=True, exist_ok=True)
+        logger.info(f"Dev mode detected (symlink): extracting binaries to {extraction_dir}")
+
+        # Add this directory to sys.path if not already there
+        if str(extraction_dir.parent) not in sys.path:
+            sys.path.insert(0, str(extraction_dir.parent))
+            logger.debug(f"Added {extraction_dir.parent} to sys.path")
+    else:
+        # Prod mode: extract directly to the target
+        extraction_dir = hbase_dir
+        logger.info(f"Prod mode: extracting to {extraction_dir}")
+
+
     # Extract files, skipping other platform-specific files
+    extracted_count = 0
     with tarfile.open(archive_path, 'r:gz') as tar_file:
         for member in tar_file.getmembers():
             # Skip files that match platform extensions of other platforms
@@ -247,9 +268,13 @@ def extract_filtered_lib(archive_path: Path, hbase_dir: Path):
                     skip = True
                     logger.debug(f"Skipping {member.name} (not for this platform)")
                     break
+
             if not skip:
-                tar_file.extract(member, path=hbase_dir)
-                logger.debug(f"Extracted {member.name} to {hbase_dir}")
+                tar_file.extract(member, path=extraction_dir)
+                logger.debug(f"Extracted {member.name} to {extraction_dir}")
+                extracted_count += 1
+
+    logger.info(f"Extracted {extracted_count} files for platform: {platform}")
 
 
 
