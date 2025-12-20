@@ -342,6 +342,7 @@ def extract_filtered_lib(
     # Extract files, skipping other platform-specific files
     with tarfile.open(archive_path, 'r:gz') as tar_file:
         for member in tar_file.getmembers():
+            print(member)
             # Skip files that match platform extensions of other platforms
             skip: bool = False
             for ext in platform_files.values():
@@ -352,7 +353,6 @@ def extract_filtered_lib(
 
             if not skip:
                 tar_file.extract(member, path=extraction_dir)
-                extracted_count += 1
 
 
 
@@ -375,8 +375,6 @@ def remove_restart_iter(args) -> list[str]:
 class _FSM(Enum):
     INIT = 'init'
     UPDATE_HBASE = 'update_hbase'
-    INSTALL_APP = 'install_app'
-    UPDATE_APP = 'update_app'
     ENDED = 'ended'
 
 
@@ -395,60 +393,47 @@ def fsm(
 
         if fsm_state == _FSM.INIT:
             # Compare frontend api version vs backend
-            app_version, be_api_version = read_versions(
+            app_version, app_api_version, hbase_api_version = get_versions(
                 app_name,
                 app_install_dir=app_install_dir,
                 hwss_dir=hwss_dir
             )
-            logger.info(f"{app_name}: version: {be_api_version}")
-            logger.info(f"{app_name}: fe_api_version: {fe_api_version}")
-            logger.info(f"{app_name}: fe_api_version: {fe_api_version}")
+            logger.info(f"{app_name}: hbase API version: {hbase_api_version}")
+            logger.info(f"{app_name}: requested API version by frontend: {fe_api_version}")
+            logger.info(f"{app_name}: installed API version: {app_api_version}")
+            logger.info(f"{app_name}: application version: {app_version}")
 
             is_hbase_installed = all([
                 Path(hbase_dir / "modules" / m / "__init__.py").exists()
                 for m in ('hwss', 'hinstall')
             ])
             logger.info(f"hbase installed: {is_hbase_installed}")
-
-            if not is_hbase_installed or be_api_version is None:
-                # Backend for the application is not installed yet,
-                # start the hwss, let's first update it
+            if not is_hbase_installed or hbase_api_version is None:
+                # hwss is not installed yet
                 fsm_state = _FSM.UPDATE_HBASE
                 continue
 
-            elif fe_api_version is None:
-                # Not specified, because the frontend is not installed
-                # use current api
-                fsm_state = _FSM.ENDED
-                if devmode:
+            # Verify just the application API version to be sure that the hwss version is
+            #   up-to-date
+            # hinstall/hwss must be up-to-date to communicate with frontend
+            if app_api_version is not None:
+                if app_api_version[0] < hbase_api_version[0]:
+                    # Not compatible version -> backend has to be updated
+                    # will start the hwss to update it
+                    fsm_state = _FSM.ENDED
+                    logger.info(f"Not compatible API version. {app_name} will be installed")
+
+                if app_api_version[0] > hbase_api_version[0]:
+                    # Not compatible version -> hwss to be updated
+                    logger.warning("Not compatible API version. hwss will be updated first")
                     fsm_state = _FSM.UPDATE_HBASE
+                    continue
 
-            elif fe_api_version == be_api_version:
-                # Installed with same API version, no need to update
-                # neither the bootstrap&hinstall, nor the appli
-                fsm_state = _FSM.ENDED
-
-            # Not compatible API
-            elif fe_api_version[0] > be_api_version[0]:
-                # Force update the backend to match frontend
-                # It will automatically update the bootstrap if required
+            if fe_api_version is None:
+                # whatever, use the latest hwss version
+                logger.info(f"Not API version specified. Update to the latest")
                 fsm_state = _FSM.UPDATE_HBASE
-
-            elif fe_api_version[0] < be_api_version[0]:
-                # The user must install latest frontend version
-                fsm_state = _FSM.ENDED
-                logger.error("Not compatible API version. Update frontend.")
-                sys.exit(-2)
-
-            else:
-                logger.error("unknow event")
-                sys.exit(-1)
-
-
-        elif fsm_state == _FSM.UPDATE_APP:
-            # (?)
-            # remove the __init__ to force reinstall
-            fsm_state = _FSM.INSTALL_APP
+                continue
 
 
         elif fsm_state == _FSM.UPDATE_HBASE:
@@ -477,15 +462,18 @@ def fsm(
             retry = 3
             hbase_release: dict | None = None
             while retry:
-                if fe_api_version:
-                    fe_major_api_version = fe_api_version[0]
-                    hbase_release = find_latest_hbase_for_api_major(api_major=fe_major_api_version)
-                else:
-                    # Use the latest release
-                    hbase_release = find_latest_hbase_for_api_major(api_major="")
+                try:
+                    if fe_api_version:
+                        fe_major_api_version = fe_api_version[0]
+                        hbase_release = find_latest_hbase_for_api_major(api_major=fe_major_api_version)
+                    else:
+                        # Use the latest release
+                        hbase_release = find_latest_hbase_for_api_major(api_major="")
 
-                if hbase_release is not None:
-                    break
+                    if hbase_release is not None:
+                        break
+                except Exception as e:
+                    logger.warning(f"failed to retrieve latest hbase version. {str(e)}")
 
                 time.sleep(1)
                 if not is_github_alive():
@@ -494,7 +482,7 @@ def fsm(
                 retry -= 1
 
             if hbase_release is None:
-                logger.error("error: release not found")
+                logger.error("hbase release not found")
                 sys.exit(-1)
 
             # Download and extract archive
@@ -525,12 +513,12 @@ def fsm(
                     sys.exit(-1)
 
                 # Remove the modules that will be installed: hwss, hinstall
-                for module in ("hwss", "hinstall"):
-                    module_dir = hbase_dir / "modules" / module
-                    try:
-                        shutil.rmtree(module_dir)
-                    except:
-                        pass
+                # for module in ("hwss", "hinstall"):
+                #     module_dir = hbase_dir / "modules" / module
+                #     try:
+                #         shutil.rmtree(module_dir)
+                #     except:
+                #         pass
 
                 # Extract
                 try:
@@ -539,8 +527,8 @@ def fsm(
                         hbase_dir=hbase_dir,
                         force_prod=not devmode
                     )
-                except:
-                    logger.error("failed to install hbase")
+                except Exception as e:
+                    logger.error(f"failed to install hbase. {str(e)}")
                     sys.exit(-1)
 
                 # Because a new version has been installed, restart
