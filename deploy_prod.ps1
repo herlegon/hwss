@@ -7,7 +7,7 @@ Write-Host "Deploying in PROD mode (copying files)..." -ForegroundColor Cyan
 
 # Bootstrap - Remove symlinks first, then copy
 Write-Host "Deploying bootstrap files..." -ForegroundColor Yellow
-Remove-Item "$pythonDir\bootstrap_*.pyd" -Force -ErrorAction SilentlyContinue
+Remove-Item "$pythonDir\bootstrap*.pyd" -Force -ErrorAction SilentlyContinue
 
 # Remove bootstrap symlinks if they exist
 $bootstrapFiles = Get-ChildItem "$pythonDir\bootstrap*.py" -ErrorAction SilentlyContinue

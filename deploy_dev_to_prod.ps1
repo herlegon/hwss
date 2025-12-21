@@ -8,7 +8,7 @@ Write-Host "Deploying in DEV mode with symlinks..." -ForegroundColor Cyan
 
 # Deploy bootstrap files with symlinks
 Write-Host "Setting up bootstrap symlinks..." -ForegroundColor Yellow
-Remove-Item "$pythonDir\bootstrap_*.pyd" -Force -ErrorAction SilentlyContinue
+Remove-Item "$pythonDir\bootstrap*.pyd" -Force -ErrorAction SilentlyContinue
 
 # Get all bootstrap*.py files in the bootstrap directory (including bootstrap.py)
 $bootstrapFiles = Get-ChildItem ".\bootstrap\bootstrap*.py"

@@ -30,6 +30,19 @@ foreach ($file in $bootstrapFiles) {
 # Deploy hwss with symlink
 Write-Host "Setting up hwss symlink..." -ForegroundColor Yellow
 $hwssTarget = "$modulesDir\hwss"
+# Remove .pyd files from hwss source directory before symlinking
+$hwssSource = "A:\hwss\hwss"
+if (Test-Path $hwssSource) {
+    $pydFiles = Get-ChildItem "$hwssSource\*.pyd" -ErrorAction SilentlyContinue
+    if ($pydFiles) {
+        Write-Host "  Removing .pyd files from hwss source..." -ForegroundColor Yellow
+        foreach ($pyd in $pydFiles) {
+            Remove-Item $pyd.FullName -Force
+            Write-Host "    Removed: $($pyd.Name)" -ForegroundColor Gray
+        }
+    }
+}
+
 if (Test-Path $hwssTarget) {
     # Remove existing directory or symlink
     if ((Get-Item $hwssTarget).Attributes -band [System.IO.FileAttributes]::ReparsePoint) {
@@ -44,6 +57,20 @@ Write-Host "  Created symlink: $hwssTarget -> A:\hwss\hwss" -ForegroundColor Gre
 # Deploy hinstall with symlink
 Write-Host "Setting up hinstall symlink..." -ForegroundColor Yellow
 $hinstallTarget = "$modulesDir\hinstall"
+
+# Remove .pyd files from hinstall source directory before symlinking
+$hinstallSource = "A:\hinstall\hinstall"
+if (Test-Path $hinstallSource) {
+    $pydFiles = Get-ChildItem "$hinstallSource\*.pyd" -ErrorAction SilentlyContinue
+    if ($pydFiles) {
+        Write-Host "  Removing .pyd files from hinstall source..." -ForegroundColor Yellow
+        foreach ($pyd in $pydFiles) {
+            Remove-Item $pyd.FullName -Force
+            Write-Host "    Removed: $($pyd.Name)" -ForegroundColor Gray
+        }
+    }
+}
+
 if (Test-Path $hinstallTarget) {
     # Remove existing directory or symlink
     if ((Get-Item $hinstallTarget).Attributes -band [System.IO.FileAttributes]::ReparsePoint) {
