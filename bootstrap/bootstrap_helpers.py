@@ -329,7 +329,7 @@ def prepare_for_fresh_install(python_dir: Path):
 def extract_filtered_lib(
     archive_path: Path,
     hbase_dir: Path,
-    force_prod: bool = False
+    to_prod: bool = False
 ):
     """
     Extract files from the tar.gz archive to the target directory,
@@ -356,7 +356,7 @@ def extract_filtered_lib(
 
     # Check if we're in dev mode (symlink detected) and not forcing prod install
     bootstrap_script: Path = hbase_dir / "bootstrap.py"
-    is_dev_mode: bool = bootstrap_script.is_symlink() and not force_prod
+    is_dev_mode: bool = bootstrap_script.is_symlink() and not to_prod
     if is_dev_mode:
         # Extract to a separate binaries directory instead
         extraction_dir = hbase_dir / "tmp"
@@ -473,7 +473,7 @@ def fsm(
                     fsm_state = _FSM.UPDATE_HBASE
                     continue
 
-            if fe_api_version is 0:
+            if fe_api_version == 0:
                 # whatever, use the latest hwss version
                 logger.info(f"No frontend API version specified. Update to the latest")
                 fsm_state = _FSM.UPDATE_HBASE
@@ -579,7 +579,7 @@ def fsm(
                     extract_filtered_lib(
                         archive_path=archive_path,
                         hbase_dir=hbase_dir,
-                        force_prod=not devmode
+                        to_prod=to_prod
                     )
                 except Exception as e:
                     logger.error(f"failed to install hbase. {str(e)}")

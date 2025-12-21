@@ -102,10 +102,11 @@ def main():
         return
 
     logger.info(f"Bootstrap starting: app={app}")
+    logger.info(f"Dev to production: {args.to_prod}")
     logger.info("Installation directories:")
-    logger.info(f"  app_install_dir: {app_install_dir}")
-    logger.info(f"  hbase: {hbase_dir}")
+    logger.info(f"  hbase dir: {hbase_dir}")
     logger.info(f"  Modules: {module_dir}")
+    logger.info(f"  App install dir: {app_install_dir}")
     logger.info(f"  FrontEnd API version: {fe_api_version}")
 
     # try:
@@ -141,6 +142,11 @@ def main():
         if not app_entry.exists():
             logger.error(f"Server file not found: {app_entry}")
             sys.exit(1)
+
+        try:
+            sys.argv.remove("--to-prod")
+        except:
+            pass
 
         # Use run_path, and convert Path to str for compatibility
         logger.info(f"Starting app: {app_entry}")
