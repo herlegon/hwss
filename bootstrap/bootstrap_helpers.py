@@ -329,7 +329,7 @@ def prepare_for_fresh_install(python_dir: Path):
 def extract_filtered_lib(
     archive_path: Path,
     hbase_dir: Path,
-    to_prod: bool = False
+    force_prod: bool = False
 ):
     """
     Extract files from the tar.gz archive to the target directory,
@@ -356,7 +356,7 @@ def extract_filtered_lib(
 
     # Check if we're in dev mode (symlink detected) and not forcing prod install
     bootstrap_script: Path = hbase_dir / "bootstrap.py"
-    is_dev_mode: bool = bootstrap_script.is_symlink() and not to_prod
+    is_dev_mode: bool = bootstrap_script.is_symlink() and not force_prod
     if is_dev_mode:
         # Extract to a separate binaries directory instead
         extraction_dir = hbase_dir / "tmp"
@@ -443,10 +443,6 @@ def fsm(
             # default
             fsm_state = _FSM.ENDED
 
-            if to_prod:
-                _FSM.UPDATE_HBASE
-                continue
-
             is_hbase_installed = all([
                 Path(hbase_dir / "Modules" / m / "__init__.py").exists()
                 for m in ('hwss', 'hinstall')
@@ -466,6 +462,10 @@ def fsm(
                     # will start the hwss to update it
                     fsm_state = _FSM.ENDED
                     logger.info(f"Not compatible API version. {app_name} will be installed")
+                    if to_prod:
+                        logger.info(f"Force update because of --to-prod arg")
+                        fsm_state = _FSM.UPDATE_HBASE
+                        continue
 
                 if app_api_version[0] > hbase_api_version:
                     # Not compatible version -> hwss to be updated
@@ -473,7 +473,7 @@ def fsm(
                     fsm_state = _FSM.UPDATE_HBASE
                     continue
 
-            if fe_api_version == 0:
+            if fe_api_version is 0:
                 # whatever, use the latest hwss version
                 logger.info(f"No frontend API version specified. Update to the latest")
                 fsm_state = _FSM.UPDATE_HBASE
@@ -513,15 +513,14 @@ def fsm(
                     sys.exit(-1)
                 retry -= 1
 
-            print(red("hbase_release"))
-            pprint(hbase_release)
-            print(f"hbase_api_version: {hbase_api_version}")
-
             if hbase_release is None:
                 logger.error("hbase release not found")
                 sys.exit(-1)
 
-            if not to_prod:
+            logger.info(f"release version: {'.'.join(hbase_release['version'])}")
+            logger.info(f"hbase_api_version: {hbase_api_version}")
+
+            if not to_prod and hbase_version:
                 # release version is higher
                 if not hbase_release['version'] > hbase_version:
                     logger.info("Already the latest version")
@@ -579,7 +578,7 @@ def fsm(
                     extract_filtered_lib(
                         archive_path=archive_path,
                         hbase_dir=hbase_dir,
-                        to_prod=to_prod
+                        force_prod=to_prod
                     )
                 except Exception as e:
                     logger.error(f"failed to install hbase. {str(e)}")
