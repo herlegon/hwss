@@ -122,6 +122,11 @@ def main():
     #     logger.error(f"Exception while running fsm: {str(e)}")
     #     sys.exit(1)
 
+    try:
+        sys.argv.remove("--to-prod")
+    except:
+        pass
+
     # Restart or launch the webserver
     if restart:
         # Preserve original arguments when restarting
@@ -142,13 +147,6 @@ def main():
         if not app_entry.exists():
             logger.error(f"Server file not found: {app_entry}")
             sys.exit(1)
-
-        try:
-            sys.argv.remove("--to-prod")
-        except:
-            pass
-
-        # Use run_path, and convert Path to str for compatibility
 
         # Add modules/ to sys.path (not hwss/)
         if module_dir not in sys.path:
