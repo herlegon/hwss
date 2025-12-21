@@ -20,11 +20,11 @@ def main():
 
     # Bootstrap-specific arguments
     parser.add_argument('--app', type=str, default='hwss')
-    parser.add_argument('--skip-update', action='store_true')
     parser.add_argument('--list-apps', action='store_true')
-    parser.add_argument('--api-version', type=str, default="")
+    parser.add_argument('--api-version', type=int, default=0)
     parser.add_argument('--restart-iter', type=int, default=0)
     parser.add_argument('--default-install-dir', action='store_true')
+    parser.add_argument('--to-prod', action='store_true')
 
     # Server arguments (will be passed through)
     parser.add_argument('--host', default="127.0.0.1")
@@ -71,50 +71,24 @@ def main():
     if args.restart_iter > 1:
         time.sleep(1)
 
-    # devmode
-    devmode: bool = args.devmode
-
     # Installation directory
-    # This won't work in dev mode
-    this_dir: Path = Path(__file__).resolve().parent
-    app_install_dir: Path = this_dir.parent
+    this_dir: Path = Path(__file__).parent
     hbase_dir = this_dir
-    hwss_dir = hbase_dir / "modules" / "hwss"
-    if devmode:
-        # Use the local repos
-        app_install_dir = this_dir.parent.parent
-        hwss_dir = this_dir.parent / "hwss"
-        hbase_dir = get_install_dir() / "python"
-
-    elif args.default_install_dir:
-        org_install_dir = get_install_dir()
-        app_install_dir = org_install_dir
-        hbase_dir = org_install_dir / "python"
-        hwss_dir = org_install_dir / "python" / "modules" / "hwss"
+    module_dir = hbase_dir / "Modules"
+    app_install_dir: Path = this_dir.parent
 
     # Application
     app: str = args.app
     app_entry: Path = (
         app_install_dir / app / "wss.py"
         if app != 'hwss'
-        else hwss_dir / "wss.py"
+        else module_dir / "hwss" / "wss.py"
     )
 
     # Frontend specifies its api version.
     # if not provided, we will use the installed one.
     # if hbase not installed, use the latest available
-    fe_api_version_str: str = args.api_version
-    fe_api_version: tuple[int, int] | None = None
-    if not fe_api_version_str:
-        fe_api_version = None
-
-    elif match := re.search(r"(\d+)\.(\d+)", args.api_version):
-        fe_api_version = (int(match.group(1)), int(match.group(2)))
-
-    else:
-        fe_api_version = None
-        logger.error("erroneous api version")
-        sys.exit(1)
+    fe_api_version: int | None = args.api_version
 
     # List applications and exit
     if args.list_apps:
@@ -127,21 +101,21 @@ def main():
             logger.info("No servers found. Packages may not be installed yet.")
         return
 
-    logger.info(f"Bootstrap starting: app={app}, devmode={devmode}")
+    logger.info(f"Bootstrap starting: app={app}")
     logger.info("Installation directories:")
     logger.info(f"  app_install_dir: {app_install_dir}")
     logger.info(f"  hbase: {hbase_dir}")
-    logger.info(f"  hwss: {hwss_dir}")
+    logger.info(f"  Modules: {module_dir}")
     logger.info(f"  FrontEnd API version: {fe_api_version}")
 
     # try:
     restart = fsm(
         app_name=app,
-        app_install_dir=app_install_dir if app != 'hwss' else hwss_dir.parent,
+        app_install_dir=app_install_dir if app != 'hwss' else module_dir.parent,
         fe_api_version=fe_api_version,
         hbase_dir=hbase_dir,
-        hwss_dir=hwss_dir,
-        devmode=devmode,
+        module_dir=module_dir,
+        to_prod=args.to_prod,
     )
     # except Exception as e:
     #     logger.error(f"Exception while running fsm: {str(e)}")

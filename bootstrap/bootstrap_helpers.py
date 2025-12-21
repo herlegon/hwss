@@ -51,7 +51,7 @@ def get_install_dir(
 def get_versions(
     app_name: str,
     app_install_dir: Path,
-    hwss_dir: Path,
+    module_dir: Path,
 ) -> tuple[tuple[int, int, int] | None, tuple[int, int, int] | None, tuple[int, int, int] | None]:
     """Returns hbase_version, app_api_version, app_version
         - hbase version:
@@ -75,8 +75,10 @@ def get_versions(
     app_version_fp: Path = app_install_dir / app_name / "__init__.py"
     print(f"search {app_name} versions in {app_version_fp}")
 
-    api_version_fp: Path = hwss_dir / "api.py"
-    hinstall_version_fp: Path = hwss_dir.parent / "hinstall" / "__init__.py"
+    api_version_fp: Path = module_dir / "hwss" / "api.pyx"
+    if not api_version_fp.exists():
+        api_version_fp: Path = module_dir / "hwss" / "api.py"
+    hinstall_version_fp: Path = module_dir / "hinstall" / "__init__.py"
     print(f"search api version in {api_version_fp}")
     print(f"search hinstall version in {hinstall_version_fp}")
 
@@ -135,6 +137,7 @@ def get_installed_apps(app_install_dir: Path) -> dict[str, tuple[int, int]]:
             hbase_version, app_api_version, app_version = get_versions(
                 app_name=app_name,
                 app_install_dir=app_install_dir,
+                hinstall_dir=app_install_dir / "python" / "Modules" / "hinstall",
                 hwss_dir=app_install_dir / "python" / "Modules" / "hwss",
             )
             if app_version is not None:
@@ -144,31 +147,35 @@ def get_installed_apps(app_install_dir: Path) -> dict[str, tuple[int, int]]:
 
 
 
-def find_latest_hbase_for_api_major(api_major: str = "") -> dict[str, int | str] | None:
+def find_latest_hbase_for_api(api: int = 0) -> dict[str, int | str | tuple] | None:
     """Find latest hbase package for specific API major version (any minor/patch)"""
 
     # Get all releases
     url = "https://api.github.com/repos/herlegon/hbase/releases"
-    response = requests.get(url)
+    try:
+        response = requests.get(url, timeout=10)
+    except Exception as e:
+        logger.warning(f"failed to fetch the list of release. {str(e)}")
+        return None
+
     releases = response.json()
 
-    # Pattern: hbase-{major}.{minor}.{patch}.tar.gz
-    if not api_major:
+    # Pattern: hbase-{api}.{hinstall_major}.{hinstall_minor}.tar.gz
+    if not api:
+        logger.info(f"find latest version")
         pattern = r"hbase-(\d+)\.(\d+)\.(\d+)\.tar\.gz"
         compatible = []
         for release in releases:
             for asset in release['assets']:
                 match = re.match(pattern, asset['name'])
                 if match:
-                    major = int(match.group(1))
-                    minor = int(match.group(2))
-                    patch = int(match.group(3))
-                    full_version = f"{major}.{minor}.{patch}"
+                    api = int(match.group(1))
+                    major = int(match.group(2))
+                    minor = int(match.group(3))
                     compatible.append({
-                        'version': full_version,
-                        'api_major': major,
-                        'api_minor': minor,
-                        'patch': patch,
+                        'version': (api, major, minor),
+                        'api': api,
+                        'hinstall': (major, minor),
                         'url': asset['browser_download_url']
                     })
 
@@ -176,32 +183,34 @@ def find_latest_hbase_for_api_major(api_major: str = "") -> dict[str, int | str]
             return None
 
         # Sort by major, minor, and patch (desc) to get the latest overall release
-        compatible.sort(key=lambda x: (x['api_major'], x['api_minor'], x['patch']), reverse=True)
+        compatible.sort(key=lambda x: (x['api'], *x['hinstall']), reverse=True)
         return compatible[0]
 
     else:
-        pattern = rf"hbase-{api_major}\.(\d+)\.(\d+)\.tar\.gz"
+        logger.info(f"find latest version for api={api}")
+        pattern = rf"hbase-{api}\.(\d+)\.(\d+)\.tar\.gz"
         compatible = []
         for release in releases:
             for asset in release['assets']:
                 match = re.match(pattern, asset['name'])
                 if match:
-                    minor = int(match.group(1))
-                    patch = int(match.group(2))
-                    full_version = f"{api_major}.{minor}.{patch}"
+                    api = int(match.group(1))
+                    major = int(match.group(2))
+                    minor = int(match.group(3))
+                    full_version = f"{api}.{major}.{minor}"
                     compatible.append({
                         'version': full_version,
-                        'api_major': api_major,
-                        'api_minor': minor,
-                        'patch': patch,
+                        'api': api,
+                        'hinstall': (major, minor),
                         'url': asset['browser_download_url']
                     })
 
         if not compatible:
             return None
         # Sort by minor (desc), then patch (desc) to get latest
-        compatible.sort(key=lambda x: (x['api_minor'], x['patch']), reverse=True)
+        compatible.sort(key=lambda x: x['hinstall'], reverse=True)
         return compatible[0]
+
 
 
 def is_github_alive() -> bool:
@@ -406,31 +415,40 @@ class _FSM(Enum):
 def fsm(
     app_name: str,
     app_install_dir: Path,
-    fe_api_version: tuple[int, int] | None,
+    fe_api_version: int,
     hbase_dir: Path,
-    hwss_dir: Path,
-    devmode: bool = False,
+    module_dir: Path,
+    to_prod: bool = False
 ) -> bool:
     restart: bool = False
 
     # First, get the api version of the hbase (bootstrap + hwss + hinstall)
-    app_version, app_api_version, hbase_api_version = get_versions(
+    hbase_version, app_api_version, app_version = get_versions(
         app_name,
         app_install_dir=app_install_dir,
-        hwss_dir=hwss_dir
+        module_dir=module_dir,
     )
+    hbase_api_version: int | None = None
+    if hbase_version:
+        hbase_api_version = hbase_version[0]
     logger.info(f"{app_name}: hbase API version: {hbase_api_version}")
     logger.info(f"{app_name}: requested API version by frontend: {fe_api_version}")
-    logger.info(f"{app_name}: installed API version: {app_api_version}")
-    logger.info(f"{app_name}: application version: {app_version}")
-
+    logger.info(f"{app_name}: installed app API version: {app_api_version}")
+    logger.info(f"{app_name}: hbase version: {hbase_version}")
 
     fsm_state = _FSM.INIT
     while fsm_state != _FSM.ENDED:
 
         if fsm_state == _FSM.INIT:
+            # default
+            fsm_state = _FSM.ENDED
+
+            if to_prod:
+                _FSM.UPDATE_HBASE
+                continue
+
             is_hbase_installed = all([
-                Path(hbase_dir / "modules" / m / "__init__.py").exists()
+                Path(hbase_dir / "Modules" / m / "__init__.py").exists()
                 for m in ('hwss', 'hinstall')
             ])
             logger.info(f"hbase installed: {is_hbase_installed}")
@@ -443,19 +461,19 @@ def fsm(
             #   up-to-date
             # hinstall/hwss must be up-to-date to communicate with frontend
             if app_api_version is not None:
-                if app_api_version[0] < hbase_api_version[0]:
+                if app_api_version[0] < hbase_api_version:
                     # Not compatible version -> backend has to be updated
                     # will start the hwss to update it
                     fsm_state = _FSM.ENDED
                     logger.info(f"Not compatible API version. {app_name} will be installed")
 
-                if app_api_version[0] > hbase_api_version[0]:
+                if app_api_version[0] > hbase_api_version:
                     # Not compatible version -> hwss to be updated
                     logger.warning("Not compatible API version. hwss will be updated first")
                     fsm_state = _FSM.UPDATE_HBASE
                     continue
 
-            if fe_api_version is None:
+            if fe_api_version is 0:
                 # whatever, use the latest hwss version
                 logger.info(f"No frontend API version specified. Update to the latest")
                 fsm_state = _FSM.UPDATE_HBASE
@@ -478,15 +496,14 @@ def fsm(
             hbase_release: dict | None = None
             while retry:
                 try:
-                    if fe_api_version:
-                        fe_major_api_version = fe_api_version[0]
-                        hbase_release = find_latest_hbase_for_api_major(api_major=fe_major_api_version)
+                    if not fe_api_version or to_prod:
+                        hbase_release = find_latest_hbase_for_api(api=0)
                     else:
-                        # Use the latest release
-                        hbase_release = find_latest_hbase_for_api_major(api_major="")
+                        hbase_release = find_latest_hbase_for_api(api=fe_api_version)
 
                     if hbase_release is not None:
                         break
+
                 except Exception as e:
                     logger.warning(f"failed to retrieve latest hbase version. {str(e)}")
 
@@ -498,13 +515,29 @@ def fsm(
 
             print(red("hbase_release"))
             pprint(hbase_release)
-            print(hbase_api_version)
-            sys.exit()
-
+            print(f"hbase_api_version: {hbase_api_version}")
 
             if hbase_release is None:
                 logger.error("hbase release not found")
                 sys.exit(-1)
+
+            if not to_prod:
+                # release version is higher
+                if not hbase_release['version'] > hbase_version:
+                    logger.info("Already the latest version")
+                    fsm_state = _FSM.ENDED
+                    continue
+
+                # release has a higher api version
+                if not hbase_release['api'] > hbase_api_version:
+                    logger.info("")
+                    fsm_state = _FSM.ENDED
+                    continue
+
+                # or higher hinstall version
+                if not hbase_release['hinstall'] > tuple(hbase_version[1:]):
+                    fsm_state = _FSM.ENDED
+                    continue
 
             # Download and extract archive
             archive_url = hbase_release['url']
