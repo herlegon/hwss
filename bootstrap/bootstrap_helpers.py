@@ -517,7 +517,7 @@ def fsm(
                 logger.error("hbase release not found")
                 sys.exit(-1)
 
-            logger.info(f"release version: {'.'.join(hbase_release['version'])}")
+            logger.info(f"release version: {'.'.join(map(str, hbase_release['version']))}")
             logger.info(f"hbase_api_version: {hbase_api_version}")
 
             if not to_prod and hbase_version:
