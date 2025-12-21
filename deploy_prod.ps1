@@ -1,7 +1,7 @@
 # deploy_prod.ps1 - Copy files instead of symlinks
 $ErrorActionPreference = "Stop"
 $pythonDir = "C:\Users\Arnaud\AppData\Local\herlegon\python"
-$modulesDir = "$pythonDir\Modules"
+$modulesDir = "$pythonDir\modules"
 
 Write-Host "Deploying in PROD mode (copying files)..." -ForegroundColor Cyan
 

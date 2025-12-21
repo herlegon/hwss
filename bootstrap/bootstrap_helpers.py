@@ -137,8 +137,8 @@ def get_installed_apps(app_install_dir: Path) -> dict[str, tuple[int, int]]:
             hbase_version, app_api_version, app_version = get_versions(
                 app_name=app_name,
                 app_install_dir=app_install_dir,
-                hinstall_dir=app_install_dir / "python" / "Modules" / "hinstall",
-                hwss_dir=app_install_dir / "python" / "Modules" / "hwss",
+                hinstall_dir=app_install_dir / "python" / "modules" / "hinstall",
+                hwss_dir=app_install_dir / "python" / "modules" / "hwss",
             )
             if app_version is not None:
                 apps[app_name] = (hbase_version, app_api_version, app_version)
@@ -444,7 +444,7 @@ def fsm(
             fsm_state = _FSM.ENDED
 
             is_hbase_installed = all([
-                Path(hbase_dir / "Modules" / m / "__init__.py").exists()
+                Path(hbase_dir / "modules" / m / "__init__.py").exists()
                 for m in ('hwss', 'hinstall')
             ])
             logger.info(f"hbase installed: {is_hbase_installed}")
@@ -473,7 +473,7 @@ def fsm(
                     fsm_state = _FSM.UPDATE_HBASE
                     continue
 
-            if fe_api_version is 0:
+            if fe_api_version == 0:
                 # whatever, use the latest hwss version
                 logger.info(f"No frontend API version specified. Update to the latest")
                 fsm_state = _FSM.UPDATE_HBASE

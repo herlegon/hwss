@@ -74,7 +74,7 @@ def main():
     # Installation directory
     this_dir: Path = Path(__file__).parent
     hbase_dir = this_dir
-    module_dir = hbase_dir / "Modules"
+    module_dir = hbase_dir / "modules"
     app_install_dir: Path = this_dir.parent
 
     # Application
@@ -149,13 +149,15 @@ def main():
             pass
 
         # Use run_path, and convert Path to str for compatibility
+
+        # Add modules/ to sys.path (not hwss/)
+        if module_dir not in sys.path:
+            sys.path.insert(0, module_dir)
+        logger.info(f"module_dir: {module_dir}")
+        logger.info(f"sys.path:\n  {'\n  '.join(map(str, sys.path))}")
+
         logger.info(f"Starting app: {app_entry}")
         logger.info(f"Starting app with args: {sys.argv[1:]}")
-
-        # Only add modules/ to sys.path (not hwss/)
-        modules_dir = app_entry.parent.parent  # modules/
-        if str(modules_dir) not in sys.path:
-            sys.path.insert(0, str(modules_dir))
         runpy.run_module('hwss.wss', run_name='__main__')
 
         # runpy.run_path(str(app_entry), run_name='__main__')

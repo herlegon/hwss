@@ -2,7 +2,7 @@
 $ErrorActionPreference = "Stop"
 
 $pythonDir = "C:\Users\Arnaud\AppData\Local\herlegon\python"
-$modulesDir = "$pythonDir\Modules"
+$modulesDir = "$pythonDir\modules"
 
 Write-Host "Deploying in DEV mode with symlinks..." -ForegroundColor Cyan
 
