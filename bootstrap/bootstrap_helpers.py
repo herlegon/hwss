@@ -137,8 +137,8 @@ def get_installed_apps(app_install_dir: Path) -> dict[str, tuple[int, int]]:
             hbase_version, app_api_version, app_version = get_versions(
                 app_name=app_name,
                 app_install_dir=app_install_dir,
-                hinstall_dir=app_install_dir / "python" / "modules" / "hinstall",
-                hwss_dir=app_install_dir / "python" / "modules" / "hwss",
+                hinstall_dir=app_install_dir / "python" / "Modules" / "hinstall",
+                hwss_dir=app_install_dir / "python" / "Modules" / "hwss",
             )
             if app_version is not None:
                 apps[app_name] = (hbase_version, app_api_version, app_version)
@@ -322,7 +322,7 @@ def prepare_for_fresh_install(python_dir: Path):
     """
     logger.info("Preparing for fresh installation...")
     prepare_bootstrap_for_fresh_install(python_dir)
-    prepare_modules_for_fresh_install(python_dir / "modules")
+    prepare_modules_for_fresh_install(python_dir / "Modules")
     logger.info("Preparation complete. Ready for fresh installation.")
 
 
@@ -444,7 +444,7 @@ def fsm(
             fsm_state = _FSM.ENDED
 
             is_hbase_installed = all([
-                Path(hbase_dir / "modules" / m / "__init__.py").exists()
+                Path(hbase_dir / "Modules" / m / "__init__.py").exists()
                 for m in ('hwss', 'hinstall')
             ])
             logger.info(f"hbase installed: {is_hbase_installed}")
@@ -567,7 +567,7 @@ def fsm(
 
                 # Remove the modules that will be installed: hwss, hinstall
                 # for module in ("hwss", "hinstall"):
-                #     module_dir = hbase_dir / "modules" / module
+                #     module_dir = hbase_dir / "Modules" / module
                 #     try:
                 #         shutil.rmtree(module_dir)
                 #     except:

@@ -2,14 +2,22 @@ import argparse
 import logging
 import os
 from pathlib import Path
-import re
 import runpy
 import signal
 import sys
 import time
 
+# CRITICAL: Add modules to sys.path FIRST, before any other imports that might use it
+python_root = Path(__file__).parent
+module_dir = python_root / "Modules"
+if str(module_dir) not in sys.path:
+    sys.path.insert(0, str(module_dir))
+
+# Invalidate import caches so Python recognizes the new path
+import importlib
+importlib.invalidate_caches()
+
 from bootstrap_helpers import (
-    get_install_dir,
     get_installed_apps,
     fsm,
     remove_restart_iter,
@@ -74,7 +82,7 @@ def main():
     # Installation directory
     this_dir: Path = Path(__file__).parent
     hbase_dir = this_dir
-    module_dir = hbase_dir / "modules"
+    module_dir = hbase_dir / "Modules"
     app_install_dir: Path = this_dir.parent
 
     # Application
@@ -148,12 +156,7 @@ def main():
             logger.error(f"Server file not found: {app_entry}")
             sys.exit(1)
 
-        # Add modules/ to sys.path (not hwss/)
-        if module_dir not in sys.path:
-            sys.path.insert(0, module_dir)
-        logger.info(f"module_dir: {module_dir}")
         logger.info(f"sys.path:\n  {'\n  '.join(map(str, sys.path))}")
-
         logger.info(f"Starting app: {app_entry}")
         logger.info(f"Starting app with args: {sys.argv[1:]}")
         runpy.run_module('hwss.wss', run_name='__main__')
