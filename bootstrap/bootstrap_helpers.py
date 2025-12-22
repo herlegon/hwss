@@ -1,11 +1,12 @@
 from enum import Enum
-import logging
-
 from http import client
+import logging
 import os
+from packaging.version import Version
 from pathlib import Path
 from pprint import pprint
 import re
+import subprocess
 import tarfile
 import tempfile
 import time
@@ -16,8 +17,6 @@ from urllib.error import (
     URLError,
     HTTPError,
 )
-
-from hytils import red
 
 logger = logging.getLogger("bootstrap")
 
@@ -48,22 +47,24 @@ def get_install_dir(
     return base.resolve() / organization
 
 
-def get_versions(
-    app_name: str,
-    app_install_dir: Path,
+
+def get_local_versions(
     module_dir: Path,
-) -> tuple[tuple[int, int, int] | None, tuple[int, int, int] | None, tuple[int, int, int] | None]:
+    app_install_dir: Path,
+    app_name: str,
+) -> tuple[tuple[int, int, int | tuple[int, int]] | None, ...]:
     """Returns hbase_version, app_api_version, app_version
         - hbase version:
-            x.y.z with
+            x.y.zzz with
                 x = __api_version__ in hwss/api.py
-                y.z = __version__ in hinstall/api.py
+                y = __api_version__ in ./bootstrap.py
+                zzz = __version__ in hinstall/api.py
         - application API version
-            x.r.t = __api_version__ in app_install_dir/app/__init__.py
+            x.r.ttt = __api_version__ in app_install_dir/app/__init__.py
         - application version
             a.b.c = __version__ in app_install_dir/app/__init__.py
 
-        in bootstrap/hbase: we don't care of "r, t, a, b, c"
+        in bootstrap/hbase: we don't care of "r, ttt, a, b, c"
         application versions are just for debug
     """
     hbase_version = None
@@ -72,76 +73,106 @@ def get_versions(
     app_api_version = None
     app_version = None
 
-    app_version_fp: Path = app_install_dir / app_name / "__init__.py"
-    print(f"search {app_name} versions in {app_version_fp}")
-
     api_version_fp: Path = module_dir / "hwss" / "api.pyx"
     if not api_version_fp.exists():
-        api_version_fp: Path = module_dir / "hwss" / "api.py"
-    hinstall_version_fp: Path = module_dir / "hinstall" / "__init__.py"
-    print(f"search api version in {api_version_fp}")
-    print(f"search hinstall version in {hinstall_version_fp}")
+        api_version_fp: Path = module_dir / "api.py"
 
-    for version_fp in (api_version_fp, hinstall_version_fp, app_version_fp):
+    bootstrap_version_fp: Path = Path(__file__) / "bootstrap.py"
+    hinstall_version_fp: Path = module_dir / "hinstall" / "__init__.py"
+    app_version_fp: Path = app_install_dir / app_name / "__init__.py"
+    print(f"search {app_name} versions in {app_version_fp}")
+    print(f"search API version in {api_version_fp}")
+    print(f"search boostrap version in {bootstrap_version_fp}")
+    print(f"search hinstall version in {hinstall_version_fp}")
+    print(f"search app / app API version in {app_version_fp}")
+
+    for version_fp in (
+        api_version_fp,
+        bootstrap_version_fp,
+        hinstall_version_fp,
+        app_version_fp
+    ):
         if not version_fp.exists():
             continue
         try:
             content = version_fp.read_text(encoding='utf-8')
             for line in content.split('\n'):
-                if line.strip().startswith('__version__') and '=' in line:
-                    value = line.split('=', 1)[1].strip().strip('"\'')
-                    if match := re.search(r"(\d+)(?:\.(\d+))?(?:\.(\d+))?", value):
-                        major = int(match.group(1))
-                        minor = int(match.group(2)) if match.group(2) else 0
-                        patch = int(match.group(3)) if match.group(3) else 0
-                        if version_fp == hinstall_version_fp:
-                            hinstall_version = (major, minor)
-                        elif version_fp == app_version_fp:
-                            app_version = (major, minor, patch)
-
-                if line.strip().startswith('__api_version__') and '=' in line:
-                    value = line.split('=', 1)[1].strip().strip('"\'')
-                    if match := re.search(r"(\d+)(?:\.(\d+))?(?:\.(\d+))?", value):
-                        major = int(match.group(1))
-                        minor = int(match.group(2)) if match.group(2) else 0
-                        patch = int(match.group(3)) if match.group(3) else 0
-                        if version_fp == api_version_fp:
-                            api_version = major
-                        elif version_fp == app_version_fp:
-                            app_api_version = (major, minor, patch)
+                for version_str in ('__version__', '__api_version__'):
+                    if line.strip().startswith(version_str) and '=' in line:
+                        value = line.split('=', 1)[1].strip().strip('"\'')
+                        if match := re.search(r"(\d+)(?:\.(\d+))?(?:\.(\d+))?", value):
+                            major = int(match.group(1))
+                            minor = int(match.group(2)) if match.group(2) else 0
+                            build = int(match.group(3)) if match.group(3) else 0
+                            if version_fp == api_version_fp:
+                                api_version = major
+                                break
+                            elif version_fp == bootstrap_version_fp:
+                                bootstrap_version = major
+                                break
+                            elif version_fp == hinstall_version_fp:
+                                hinstall_version = 100 * major + minor
+                                break
+                            elif version_fp == app_version_fp:
+                                if version_str == '__version__':
+                                    app_version = (major, minor, build)
+                                elif version_str == '__api_version__':
+                                    app_hinstall_major, app_hinstall_minor = build // 100, build %100
+                                    # api, bootstrap, hinstall
+                                    app_api_version = (
+                                        major, minor, (app_hinstall_major, app_hinstall_minor)
+                                    )
 
         except Exception as e:
             print(f"Warning: Could not read version from {version_fp}: {e}")
 
     if hinstall_version is not None and api_version is not None:
-        hbase_version = (api_version, hinstall_version[0], hinstall_version[1])
+        hbase_version = (api_version, bootstrap_version, hinstall_version)
 
     return hbase_version, app_api_version, app_version
 
+
+
+def get_glibc_version():
+    try:
+        output = subprocess.check_output(
+            ["ldd", "--version"],
+            stderr=subprocess.STDOUT,
+            text=True
+        )
+    except Exception as e:
+        raise RuntimeError(f"Failed to run ldd: {e}")
+
+    # Extract version number (e.g., 2.35)
+    match = re.search(r"(\d+\.\d+)", output)
+    if not match:
+        raise RuntimeError("Could not determine GLIBC version")
+
+    return Version(match.group(1))
 
 
 
 def get_installed_apps(app_install_dir: Path) -> dict[str, tuple[int, int]]:
     """List all available applications installed: they all have a wss
     """
-
-    # Find all directories that contains a websocket server
-    apps: dict[str, tuple[int, int]] = {}
-    for item in app_install_dir.iterdir():
-        if (
-            item.is_dir()
-            and (item / "wss.py").exists()
-            and (item / "__init__.py").exists()
-        ):
-            app_name = item.name
-            hbase_version, app_api_version, app_version = get_versions(
-                app_name=app_name,
-                app_install_dir=app_install_dir,
-                hinstall_dir=app_install_dir / "python" / "Modules" / "hinstall",
-                hwss_dir=app_install_dir / "python" / "Modules" / "hwss",
-            )
-            if app_version is not None:
-                apps[app_name] = (hbase_version, app_api_version, app_version)
+    apps = None
+    # # Find all directories that contains a websocket server
+    # apps: dict[str, tuple[int, int]] = {}
+    # for item in app_install_dir.iterdir():
+    #     if (
+    #         item.is_dir()
+    #         and (item / "wss.py").exists()
+    #         and (item / "__init__.py").exists()
+    #     ):
+    #         app_name = item.name
+    #         hbase_version, app_api_version, app_version = get_local_versions(
+    #             app_name=app_name,
+    #             app_install_dir=app_install_dir,
+    #             hinstall_dir=app_install_dir / "python" / "Modules" / "hinstall",
+    #             hwss_dir=app_install_dir / "python" / "Modules" / "hwss",
+    #         )
+    #         if app_version is not None:
+    #             apps[app_name] = (hbase_version, app_api_version, app_version)
 
     return apps
 
@@ -326,6 +357,7 @@ def prepare_for_fresh_install(python_dir: Path):
     logger.info("Preparation complete. Ready for fresh installation.")
 
 
+
 def extract_filtered_lib(
     archive_path: Path,
     hbase_dir: Path,
@@ -406,6 +438,7 @@ def remove_restart_iter(args) -> list[str]:
     return filtered_args
 
 
+
 class _FSM(Enum):
     INIT = 'init'
     UPDATE_HBASE = 'update_hbase'
@@ -423,18 +456,24 @@ def fsm(
     restart: bool = False
 
     # First, get the api version of the hbase (bootstrap + hwss + hinstall)
-    hbase_version, app_api_version, app_version = get_versions(
-        app_name,
-        app_install_dir=app_install_dir,
+    (
+        hbase_version,
+        app_api_version,
+        app_version,
+    ) = get_local_versions(
         module_dir=module_dir,
+        app_install_dir=app_install_dir,
+        app_name=app_name,
     )
     hbase_api_version: int | None = None
     if hbase_version:
         hbase_api_version = hbase_version[0]
+    logger.info(f"{app_name}: hbase version: {hbase_version}")
     logger.info(f"{app_name}: hbase API version: {hbase_api_version}")
     logger.info(f"{app_name}: requested API version by frontend: {fe_api_version}")
-    logger.info(f"{app_name}: installed app API version: {app_api_version}")
-    logger.info(f"{app_name}: hbase version: {hbase_version}")
+    logger.info(f"{app_name}: installed API version: {app_api_version}")
+    logger.info(f"{app_name}: installed app version: {app_version}")
+    sys.exit()
 
     fsm_state = _FSM.INIT
     while fsm_state != _FSM.ENDED:

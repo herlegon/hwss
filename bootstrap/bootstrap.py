@@ -1,11 +1,14 @@
 import argparse
 import logging
 import os
+from packaging.version import Version
 from pathlib import Path
 import runpy
 import signal
 import sys
 import time
+
+__version__ = 1
 
 # CRITICAL: Add modules to sys.path FIRST, before any other imports that might use it
 python_root = Path(__file__).parent
@@ -18,6 +21,7 @@ import importlib
 importlib.invalidate_caches()
 
 from bootstrap_helpers import (
+    get_glibc_version,
     get_installed_apps,
     fsm,
     remove_restart_iter,
@@ -70,6 +74,13 @@ def main():
 
     logging.basicConfig(**log_kwargs)
     logger = logging.getLogger("bootstrap")
+
+    # Minimum version for linux
+    if sys.platform == 'linux':
+        min_version = "2.39"
+        if get_glibc_version() < Version(min_version):
+            logger.critical(f"glibc version must be >= {min_version}. Current is {get_glibc_version()}")
+            sys.exit(1)
 
     # When restarting
     if args.restart_iter >= 3:
