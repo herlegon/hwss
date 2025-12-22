@@ -12,7 +12,7 @@ __version__ = 1
 
 # CRITICAL: Add modules to sys.path FIRST, before any other imports that might use it
 python_root = Path(__file__).parent
-module_dir = python_root / "Modules"
+module_dir = python_root / "modules"
 if str(module_dir) not in sys.path:
     sys.path.insert(0, str(module_dir))
 
@@ -93,7 +93,7 @@ def main():
     # Installation directory
     this_dir: Path = Path(__file__).parent
     hbase_dir = this_dir
-    module_dir = hbase_dir / "Modules"
+    module_dir = hbase_dir / "modules"
     app_install_dir: Path = this_dir.parent
 
     # Application
