@@ -4,6 +4,7 @@ from pprint import pprint
 import shutil
 import subprocess
 import sys
+from typing import Literal
 
 from hinstall import g_backend_dirs
 
@@ -62,7 +63,7 @@ def remove_directory_or_symlink(path: Path):
         print(f"    Removed: {path.name}")
 
 
-def create_symlinks():
+def create_symlinks(mode: Literal['dev', 'prod', 'to_prod'] = 'dev'):
     """Create symlinks for hwss, hinstall, and bootstrap extensions"""
     print("Creating symlinks...")
 
@@ -78,20 +79,29 @@ def create_symlinks():
     d_hinstall.symlink_to(s_hinstall)
     print(f"    Created symlink: {d_hinstall.name} -> {s_hinstall}")
 
-    # Create symlinks for bootstrap extensions
-    for src_file in s_bootstrap_dir.glob("bootstrap*.pyd"):
+    # Create symlinks for bootstrap modules
+    for src_file in s_bootstrap_dir.glob("bootstrap*.py"):
         dst_file = d_python_dir / src_file.name
         if dst_file.exists() or dst_file.is_symlink():
             dst_file.unlink()
         dst_file.symlink_to(src_file)
         print(f"    Created symlink: {dst_file.name} -> {src_file.name}")
 
-    for src_file in s_bootstrap_dir.glob("bootstrap*.so"):
-        dst_file = d_python_dir / src_file.name
-        if dst_file.exists() or dst_file.is_symlink():
-            dst_file.unlink()
-        dst_file.symlink_to(src_file)
-        print(f"    Created symlink: {dst_file.name} -> {src_file.name}")
+    # if mode != 'prod':
+    #     # Create symlinks for bootstrap extensions
+    #     for src_file in s_bootstrap_dir.glob("bootstrap*.pyd"):
+    #         dst_file = d_python_dir / src_file.name
+    #         if dst_file.exists() or dst_file.is_symlink():
+    #             dst_file.unlink()
+    #         dst_file.symlink_to(src_file)
+    #         print(f"    Created symlink: {dst_file.name} -> {src_file.name}")
+
+    #     for src_file in s_bootstrap_dir.glob("bootstrap*.so"):
+    #         dst_file = d_python_dir / src_file.name
+    #         if dst_file.exists() or dst_file.is_symlink():
+    #             dst_file.unlink()
+    #         dst_file.symlink_to(src_file)
+    #         print(f"    Created symlink: {dst_file.name} -> {src_file.name}")
 
 
 def copy_files():
