@@ -18,12 +18,14 @@ s_bootstrap_dir = Path(__file__).resolve().parent / "bootstrap"
 s_hwss = Path(__file__).resolve().parent.parent / "hwss" / "hwss"
 s_hinstall = Path(__file__).resolve().parent.parent / "hinstall" / "hinstall"
 
-# Helper functions
+
+
 def remove_pyd_files(directory: Path):
     if directory.exists():
         for pyd_file in directory.glob("*.pyd"):
             pyd_file.unlink()
             print(f"    Removed: {pyd_file.name}")
+
 
 
 def remove_bootstrap_extensions(directory: Path):
@@ -49,6 +51,7 @@ def remove_bootstrap_extensions(directory: Path):
             print(f"    Removed: {ext_file.name}")
 
 
+
 def remove_directory_or_symlink(path: Path):
     """Remove directory (and contents) or unlink if symlink"""
     if not path.exists() and not path.is_symlink():
@@ -61,6 +64,7 @@ def remove_directory_or_symlink(path: Path):
         print(f"    WARNING: Removing directory and its contents: {path}")
         shutil.rmtree(path)
         print(f"    Removed: {path.name}")
+
 
 
 def create_symlinks(mode: Literal['dev', 'prod', 'to_prod'] = 'dev'):
@@ -79,7 +83,7 @@ def create_symlinks(mode: Literal['dev', 'prod', 'to_prod'] = 'dev'):
     d_hinstall.symlink_to(s_hinstall)
     print(f"    Created symlink: {d_hinstall.name} -> {s_hinstall}")
 
-    # Create symlinks for bootstrap modules
+   # Create symlinks for bootstrap modules and remove pyd/so files
     for src_file in s_bootstrap_dir.glob("bootstrap*.py"):
         dst_file = d_python_dir / src_file.name
         if dst_file.exists() or dst_file.is_symlink():
@@ -87,21 +91,21 @@ def create_symlinks(mode: Literal['dev', 'prod', 'to_prod'] = 'dev'):
         dst_file.symlink_to(src_file)
         print(f"    Created symlink: {dst_file.name} -> {src_file.name}")
 
-    # if mode != 'prod':
-    #     # Create symlinks for bootstrap extensions
-    #     for src_file in s_bootstrap_dir.glob("bootstrap*.pyd"):
-    #         dst_file = d_python_dir / src_file.name
-    #         if dst_file.exists() or dst_file.is_symlink():
-    #             dst_file.unlink()
-    #         dst_file.symlink_to(src_file)
-    #         print(f"    Created symlink: {dst_file.name} -> {src_file.name}")
+    # Remove bootstrap pyd/so files
+    for ext_file in d_python_dir.glob("bootstrap*.pyd"):
+        if ext_file.is_symlink():
+            ext_file.unlink()
+        else:
+            ext_file.unlink()
+        print(f"    Removed: {ext_file.name}")
 
-    #     for src_file in s_bootstrap_dir.glob("bootstrap*.so"):
-    #         dst_file = d_python_dir / src_file.name
-    #         if dst_file.exists() or dst_file.is_symlink():
-    #             dst_file.unlink()
-    #         dst_file.symlink_to(src_file)
-    #         print(f"    Created symlink: {dst_file.name} -> {src_file.name}")
+    for ext_file in d_python_dir.glob("bootstrap*.so"):
+        if ext_file.is_symlink():
+            ext_file.unlink()
+        else:
+            ext_file.unlink()
+        print(f"    Removed: {ext_file.name}")
+
 
 
 def copy_files():
@@ -120,18 +124,12 @@ def copy_files():
     shutil.copytree(s_hinstall, d_hinstall)
     print(f"    Copied: {s_hinstall} -> {d_hinstall}")
 
-    # Copy bootstrap extensions
-    for src_file in s_bootstrap_dir.glob("bootstrap*.pyd"):
+    # Copy bootstrap modules
+    for src_file in s_bootstrap_dir.glob("bootstrap*.py"):
         dst_file = d_python_dir / src_file.name
-        if dst_file.exists() or dst_file.is_symlink():
+        if dst_file.is_symlink():
             dst_file.unlink()
-        shutil.copy2(src_file, dst_file)
-        print(f"    Copied: {src_file.name} -> {dst_file.name}")
-
-    for src_file in s_bootstrap_dir.glob("bootstrap*.so"):
-        dst_file = d_python_dir / src_file.name
-        if dst_file.exists() or dst_file.is_symlink():
-            dst_file.unlink()
+            print(f"    Removed symlink: {dst_file.name}")
         shutil.copy2(src_file, dst_file)
         print(f"    Copied: {src_file.name} -> {dst_file.name}")
 
@@ -180,3 +178,24 @@ if __name__ == "__main__":
         copy_files()
 
     print(f"\n✓ {mode.upper()} mode setup complete!")
+
+
+    # Execute bootstrap
+    print(f"\nExecuting bootstrap...")
+    bootstrap_script = d_python_dir / "bootstrap.py"
+    cmd = [str(d_backend_dirs.python_exe), str(bootstrap_script)]
+
+    if mode != "prod":
+        cmd.append("--devmode")
+
+    try:
+        subprocess.run(cmd, check=False)
+        print("✓ Bootstrap executed successfully!")
+
+    except KeyboardInterrupt:
+        print("\n✗ Bootstrap interrupted by user")
+        sys.exit(0)
+
+    except subprocess.CalledProcessError as e:
+        print(f"✗ Bootstrap execution failed with code {e.returncode}")
+        sys.exit(1)

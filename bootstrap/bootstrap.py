@@ -62,7 +62,7 @@ def main():
 
     log_kwargs = {
         "level": getattr(logging, args.log_level.upper()),
-        "format": '%(asctime)s - %(name)s - %(levelname)s %(message)s',
+        "format": '%(asctime)s %(levelname)s %(name)s: %(message)s',
         "datefmt": '%Y-%m-%d %H:%M:%S',
     }
 
@@ -90,11 +90,17 @@ def main():
     if args.restart_iter > 1:
         time.sleep(1)
 
-    # Installation directory
+    # Installation directories
+    hbase_dir: Path = Path(__file__).resolve().parent
     this_dir: Path = Path(__file__).parent
-    hbase_dir = this_dir
+    is_in_dev: bool = False
+    if this_dir != hbase_dir:
+        is_in_dev = True
+        hbase_dir = this_dir
+        logger.setLevel(logging.DEBUG)
+        logger.debug("bootstrap in devmode")
     module_dir = hbase_dir / "modules"
-    app_install_dir: Path = this_dir.parent
+    app_install_dir: Path = hbase_dir.parent
 
     # Application
     app: str = args.app
@@ -120,22 +126,23 @@ def main():
             logger.info("No servers found. Packages may not be installed yet.")
         return
 
-    logger.info(f"Bootstrap starting: app={app}")
-    logger.info(f"Dev to production: {args.to_prod}")
-    logger.info("Installation directories:")
+    logger.info(f"App: {app}")
+    logger.debug(f"Dev to production: {args.to_prod}")
+    logger.info(f"Directories:")
     logger.info(f"  hbase dir: {hbase_dir}")
     logger.info(f"  Modules: {module_dir}")
     logger.info(f"  App install dir: {app_install_dir}")
-    logger.info(f"  FrontEnd API version: {fe_api_version}")
+    logger.info(f"  Requested API version: {fe_api_version}")
 
     # try:
     restart = fsm(
         app_name=app,
-        app_install_dir=app_install_dir if app != 'hwss' else module_dir.parent,
+        app_install_dir=app_install_dir if app != 'hwss' else module_dir,
         fe_api_version=fe_api_version,
         hbase_dir=hbase_dir,
         module_dir=module_dir,
         to_prod=args.to_prod,
+        is_in_dev=is_in_dev
     )
     # except Exception as e:
     #     logger.error(f"Exception while running fsm: {str(e)}")
