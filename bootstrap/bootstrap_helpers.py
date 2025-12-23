@@ -2,6 +2,8 @@ from enum import Enum
 from http import client
 import logging
 import os
+import socket
+import threading
 from packaging.version import Version
 from pathlib import Path
 from pprint import pprint
@@ -17,6 +19,8 @@ from urllib.error import (
     URLError,
     HTTPError,
 )
+import urllib.request
+from hytils import red
 
 logger = logging.getLogger("bootstrap")
 
@@ -152,17 +156,32 @@ def get_installed_apps(app_install_dir: Path) -> dict[str, tuple[int, int]]:
 
 
 def get_releases() -> list[dict[str, str | tuple]]:
-    """Find latest hbase package for specific API major version (any minor/patch)"""
-
-    # Get all releases
     url = "https://api.github.com/repos/herlegon/hbase/releases"
-    try:
-        response = requests.get(url, timeout=10)
-    except Exception as e:
-        logger.warning(f"failed to fetch the list of release. {str(e)}")
+    retry: int = 3
+    timeout: float = 4
+
+    response = [None]
+    def _get_response():
+        try:
+            response[0] = requests.get(url, timeout=timeout)
+        except Exception as e:
+            logger.debug(f"Github nor reachable. {str(e)}")
+
+    while retry:
+        thread = threading.Thread(target=_get_response, daemon=True)
+        thread.start()
+        thread.join(timeout=timeout)
+        if response[0] is not None:
+            break
+        logger.debug(f"Retry")
+        retry -= 1
+        time.sleep(1)
+
+    if response[0] is None:
+        logger.warning(f"failed to fetch the list of release.")
         return []
 
-    response_releases = response.json()
+    response_releases = response[0].json()
 
     # Pattern: hbase-{api}.{hinstall_major}.{hinstall_minor}.tar.gz
     pattern = r"hbase-(\d+)\.(\d+)\.(\d+)\.tar\.gz"
@@ -175,8 +194,7 @@ def get_releases() -> list[dict[str, str | tuple]]:
                 bootstrap = int(match.group(2))
                 hinstall = int(match.group(3))
                 releases.append({
-                    'version': (api, bootstrap, (hinstall//100, hinstall%100)
-                    ),
+                    'version': (api, bootstrap, (hinstall//100, hinstall%100)),
                     'url': asset['browser_download_url']
                 })
 
@@ -184,87 +202,66 @@ def get_releases() -> list[dict[str, str | tuple]]:
 
 
 
-
-
-def find_latest_hbase_for_api(api: int = 0) -> dict[str, int | str | tuple] | None:
-    """Find latest hbase package for specific API major version (any minor/patch)"""
-
-    # Get all releases
-    url = "https://api.github.com/repos/herlegon/hbase/releases"
-    try:
-        response = requests.get(url, timeout=10)
-    except Exception as e:
-        logger.warning(f"failed to fetch the list of release. {str(e)}")
+def find_latest_hbase_for_api(
+    releases: list,
+    api: int = 0
+) -> dict[str, str | tuple] | None:
+    # Sort by version tuple in descending order to get the latest
+    latest_overall = max(releases, key=lambda r: r['version'])
+    if api == 0:
+        return latest_overall
+    matching_releases = [
+        release for release in releases
+        if release['version'][0] == api
+    ]
+    if not matching_releases:
+        if api == 2:
+            return latest_overall
         return None
 
-    releases = response.json()
-
-    # Pattern: hbase-{api}.{hinstall_major}.{hinstall_minor}.tar.gz
-    if not api:
-        logger.debug(f"find latest version")
-        pattern = r"hbase-(\d+)\.(\d+)\.(\d+)\.tar\.gz"
-        compatible = []
-        for release in releases:
-            for asset in release['assets']:
-                match = re.match(pattern, asset['name'])
-                if match:
-                    api = int(match.group(1))
-                    major = int(match.group(2))
-                    minor = int(match.group(3))
-                    compatible.append({
-                        'version': (api, major, minor),
-                        'api': api,
-                        'hinstall': (major, minor),
-                        'url': asset['browser_download_url']
-                    })
-
-        if not compatible:
-            return None
-
-        # Sort by major, minor, and patch (desc) to get the latest overall release
-        compatible.sort(key=lambda x: (x['api'], *x['hinstall']), reverse=True)
-        return compatible[0]
-
-    else:
-        logger.debug(f"find latest version for api={api}")
-        pattern = rf"hbase-{api}\.(\d+)\.(\d+)\.tar\.gz"
-        compatible = []
-        for release in releases:
-            for asset in release['assets']:
-                match = re.match(pattern, asset['name'])
-                if match:
-                    api = int(match.group(1))
-                    major = int(match.group(2))
-                    minor = int(match.group(3))
-                    full_version = f"{api}.{major}.{minor}"
-                    compatible.append({
-                        'version': full_version,
-                        'api': api,
-                        'hinstall': (major, minor),
-                        'url': asset['browser_download_url']
-                    })
-
-        if not compatible:
-            return None
-        # Sort by minor (desc), then patch (desc) to get latest
-        compatible.sort(key=lambda x: x['hinstall'], reverse=True)
-        return compatible[0]
+    return max(matching_releases, key=lambda r: r['version'])
 
 
 
-def is_github_alive() -> bool:
+def is_connected(timeout: float = 1.2):
+    result = [False]
+    def _check():
+        try:
+            socket.getaddrinfo("www.google.com", 80)
+            result[0] = True
+        except:
+            pass
+    thread = threading.Thread(target=_check, daemon=True)
+    thread.start()
+    thread.join(timeout=timeout)
+    return result[0]
+
+
+
+def is_github_alive(
+    timeout: float = 1,
+    sleep_duration: float=0.5,
+) -> bool:
     url = "https://api.github.com"
     retry: int = 3
-    while retry:
-        try:
-            response = requests.get(url, timeout=1)
-            response.raise_for_status()
-            return True
 
-        except requests.exceptions.RequestException as e:
+    result = [False]
+    def _check():
+        try:
+            response = requests.get(url, timeout=timeout)
+            response.raise_for_status()
+            result[0] = True
+        except Exception as e:
             logger.debug(f"Github nor reachable. {str(e)}")
+
+    while retry:
+        thread = threading.Thread(target=_check, daemon=True)
+        thread.start()
+        thread.join(timeout=timeout)
+        if result[0]:
+            return True
         retry -= 1
-        time.sleep(1)
+        time.sleep(sleep_duration)
 
     return False
 
@@ -468,7 +465,8 @@ def fsm(
     hbase_dir: Path,
     module_dir: Path,
     to_prod: bool = False,
-    is_in_dev: bool = False
+    is_in_dev: bool = False,
+    keep_up_to_date: bool = True,
 ) -> bool:
     restart: bool = False
 
@@ -496,197 +494,244 @@ def fsm(
     logger.info(f"{app_name}: installed API version: {app_api_version}")
     logger.info(f"{app_name}: installed app version: {app_version}")
 
+    is_hbase_installed: bool = all([x is not None for x in hbase_version])
+    logger.debug(f"hbase installed: {is_hbase_installed}")
 
     # If not connected to the internet
-    if not is_github_alive():
-        logger.warning(f"GitHub API is not reachable, offline")
+    if not is_connected():
+        logger.warning(f"Failed to ping an internet website, offline")
         # Check that frontend and backend are compatible:
         # same API, same hinstall major
+        if not is_hbase_installed:
+            logger.critical(f"Install is corrupted")
+            sys.exit()
+
         if not fe_api_version:
             logger.info(f"update: no frontend API version specified and no internet")
             sys.exit()
 
+        if fe_api_version == app_api_version == hbase_api_version:
+            logger.debug("No internet, API is compatible, ok to start")
+            return restart
+
+    # If not release found: when github is down or wrong server
+    releases = get_releases()
+    if not releases:
+        logger.error("No release found")
+        if not is_hbase_installed:
+            logger.critical(f"Install is corrupted")
+            sys.exit()
+
+        if fe_api_version == app_api_version == hbase_api_version:
+            # Let's start
+            logger.debug("No release found, API is compatible, ok to start")
+            return restart
+
+    do_update: bool = False
+    if app_name == 'hwss':
+        logger.debug(f"update: requested app is hwss")
+        do_update = True
+
+    elif not app_api_version:
+        logger.debug(f"update: {app_name} is not installed")
+        do_update = True
+
+    elif fe_api_version == 0:
+        logger.info(f"update: no frontend API version specified")
+        do_update = True
+
+    else:
+        logger.debug(f"{app_name} is installed")
+        # Application use an older frontend, cannot continue because
+        # downgrading is not allowed
         if (
-            fe_api_version == app_api_version
-            and fe_api_version == app_api_version
-            and fe_api_version == app_api_version
+            fe_api_version < hbase_api_version
+            or fe_api_version < app_api_version
         ):
-        hinstall_version_major = app_hbase_version[2]
+            logger.info(f"update: frontend is lower than hbase/app API version")
+            logger.critical("Frontend is too old for installed backend.")
+            sys.exit()
+
+        # Application use a newer API version -> hbase to be updated
+        elif app_api_version > hbase_api_version:
+            logger.info(f"App use an older API version.")
+            logger.warning("Not compatible API version. hbase will be updated first")
+            do_update = True
+
+        # Application use an older API version
+        # if app_api_version[0] < hbase_api_version:
+        #     logger.info(f"App use an older API version.")
+        #     fsm_state = _FSM.UPDATE_HBASE
+        #     continue
+
+        logger.info("Start application because API is compatible")
+
+    if do_update:
+        # releases.extend([
+        #     {'version': (2, 1, (0, 10)), 'url': ''},
+        #     {'version': (4, 0, (2, 1)), 'url': ''},
+        #     {'version': (4, 0, (0, 10)), 'url': ''},
+        #     {'version': (4, 1, (2, 402)), 'url': ''},
+        #     {'version': (4, 1, (0, 1)), 'url': ''},
+        # ])
+        logger.debug(f"releases:\n    {"\n    ".join(repr(r) for r in releases)}")
+        if to_prod:
+            hbase_release = find_latest_hbase_for_api(releases)
+        else:
+            hbase_release = find_latest_hbase_for_api(releases, api=fe_api_version)
+
+        if hbase_release is None:
+            logger.warning(f"Failed to find the latest version for api={fe_api_version}")
+            if fe_api_version == app_api_version == hbase_api_version:
+                # Let's start
+                logger.debug("No release found, API is compatible, ok to start")
+                return restart
+            sys.exit()
+
+        logger.debug(f"Release for api={fe_api_version}: {hbase_release}")
 
 
+    if do_update:
+        # Download and extract archive
+        archive_url = hbase_release['url']
+        archive_filename = os.path.basename(archive_url)
+        if not archive_url:
+            logger.critical("Not a valid file to download")
+            sys.exit()
 
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_dir_path = Path(temp_dir)
+            temp_dir_path.mkdir(exist_ok=True)
+            archive_path = temp_dir_path / archive_filename
 
-    fsm_state = _FSM.INIT
-    while fsm_state != _FSM.ENDED:
+            # Verify if the destination path is accessible
+            if not temp_dir_path.exists():
+                logger.error(f"Temporary directory {temp_dir_path} does not exist.")
+                return False
 
-        if fsm_state == _FSM.INIT:
-            # default
-            fsm_state = _FSM.ENDED
-
-            is_hbase_installed: bool = all([x is not None for x in hbase_version])
-            logger.debug(f"hbase installed: {is_hbase_installed}")
-            if not is_hbase_installed:
-                # At least a component is not installed yet (hwss, hinstall, bootstrap)
-                fsm_state = _FSM.UPDATE_HBASE
-                continue
-
-            # If app is hwss, update it
-            if app_name == 'hwss':
-                logger.debug(f"update: requested app is hwss")
-                fsm_state = _FSM.UPDATE_HBASE
-                continue
-
-            # Application is not installed
-            if not app_api_version:
-                logger.debug(f"update: {app_name} is not installed")
-                fsm_state = _FSM.UPDATE_HBASE
-                continue
-
-            # No frontend API version
-            if fe_api_version == 0:
-                logger.info(f"update: no frontend API version specified")
-                fsm_state = _FSM.UPDATE_HBASE
-                continue
-
-            logger.debug(f"{app_name} is installed")
-            # Application use an older frontend, cannot continue because
-            # downgrading is not allowed
-            if (
-                fe_api_version < hbase_api_version
-                or fe_api_version < app_api_version
-            ):
-                logger.info(f"update: frontend is lower than hbase/app API version")
-                logger.critical("Frontend is too old for installed backend.")
-                sys.exit()
-
-            # Application use a newer API version -> hbase to be updated
-            if app_api_version > hbase_api_version:
-                logger.info(f"App use an older API version.")
-                logger.warning("Not compatible API version. hbase will be updated first")
-                fsm_state = _FSM.UPDATE_HBASE
-                continue
-
-            # Application use an older API version
-            # if app_api_version[0] < hbase_api_version:
-            #     logger.info(f"App use an older API version.")
-            #     fsm_state = _FSM.UPDATE_HBASE
-            #     continue
-
-            logger.info("Start application because API is compatible")
-
-
-        elif fsm_state == _FSM.UPDATE_HBASE:
-            retry = 3
-            hbase_release: dict | None = None
-            while retry:
+            # Download
+            retry: int = 3
+            success: bool = False
+            while not success and retry:
                 try:
-                    if to_prod:
-                        hbase_release = find_latest_hbase_for_api()
-                    else:
-                        hbase_release = find_latest_hbase_for_api(api=fe_api_version)
-
-                    if hbase_release is not None:
-                        break
-
-                except Exception as e:
-                    logger.warning(f"failed to retrieve latest hbase version. {str(e)}")
-
-                time.sleep(1)
-                if not is_github_alive():
-                    logger.error(f"GitHub API is not reachable")
-                    sys.exit(-1)
-                retry -= 1
-
-            if hbase_release is None:
-                logger.error("hbase release not found")
+                    success = download_file(url=archive_url, filepath=archive_path)
+                except:
+                    logger.debug(f"retry")
+                    pass
+            if not success:
+                logger.critical(f"Failed to download {archive_url}")
                 sys.exit(-1)
 
+            # Remove the modules that will be installed: hwss, hinstall
+            # for module in ("hwss", "hinstall"):
+            #     module_dir = hbase_dir / "modules" / module
+            #     try:
+            #         shutil.rmtree(module_dir)
+            #     except:
+            #         pass
 
-            r_api_version = hbase_release['version'][0]
-            r_hinstall_version = (
-                hbase_release['version'][2] // 100,
-                hbase_release['version'][2] % 100,
-            )
+            # Extract
+            try:
+                extract_filtered_lib(
+                    archive_path=archive_path,
+                    hbase_dir=hbase_dir,
+                    force_prod=to_prod
+                )
+            except Exception as e:
+                logger.error(f"failed to install hbase. {str(e)}")
+                sys.exit(-1)
 
+            # Because a new version has been installed, restart
+            restart = True
 
+    print(red("finally"))
+    sys.exit()
 
-            logger.info(f"release version: {'.'.join(map(str, hbase_release['version']))}")
-            logger.info(f"release API: {r_api_version}")
-            logger.info(f"release hinstall: {r_hinstall_version}")
-
-            # if not to_prod and hbase_version:
-            #     # release version is higher
-            #     if not hbase_release['version'] > hbase_version:
-            #         logger.info("Already the latest version")
-            #         fsm_state = _FSM.ENDED
-            #         continue
-
-            #     # release has a higher api version
-            #     if not hbase_release['api'] > hbase_api_version:
-            #         logger.info("")
-            #         fsm_state = _FSM.ENDED
-            #         continue
-
-            #     # or higher hinstall version
-            #     if not hbase_release['hinstall'] > tuple(hbase_version[1:]):
-            #         fsm_state = _FSM.ENDED
-            #         continue
-
-            if to_prod or not is_in_dev:
-
-                # Download and extract archive
-                archive_url = hbase_release['url']
-                archive_filename = os.path.basename(archive_url)
-
-                with tempfile.TemporaryDirectory() as temp_dir:
-                    temp_dir_path = Path(temp_dir)
-                    temp_dir_path.mkdir(exist_ok=True)
-                    archive_path = temp_dir_path / archive_filename
-
-                    # Verify if the destination path is accessible
-                    if not temp_dir_path.exists():
-                        logger.error(f"Temporary directory {temp_dir_path} does not exist.")
-                        return False
-
-                    # Download
-                    retry: int = 3
-                    success: bool = False
-                    while not success and retry:
-                        try:
-                            success = download_file(url=archive_url, filepath=archive_path)
-                        except:
-                            logger.debug(f"retry")
-                            pass
-                    if not success:
-                        logger.error(f"Failed to download {archive_url}")
-                        sys.exit(-1)
-
-                    # Remove the modules that will be installed: hwss, hinstall
-                    # for module in ("hwss", "hinstall"):
-                    #     module_dir = hbase_dir / "modules" / module
-                    #     try:
-                    #         shutil.rmtree(module_dir)
-                    #     except:
-                    #         pass
-
-                    # Extract
-                    try:
-                        extract_filtered_lib(
-                            archive_path=archive_path,
-                            hbase_dir=hbase_dir,
-                            force_prod=to_prod
-                        )
-                    except Exception as e:
-                        logger.error(f"failed to install hbase. {str(e)}")
-                        sys.exit(-1)
-
-                    # Because a new version has been installed, restart
-                    restart = True
-
-            fsm_state = _FSM.ENDED
+        # r_api_version = hbase_release['version'][0]
+        # r_hinstall_version = (
+        #     hbase_release['version'][2] // 100,
+        #     hbase_release['version'][2] % 100,
+        # )
 
 
-        elif fsm_state == _FSM.ENDED:
-            break
+
+        #     logger.info(f"release version: {'.'.join(map(str, hbase_release['version']))}")
+        #     logger.info(f"release API: {r_api_version}")
+        #     logger.info(f"release hinstall: {r_hinstall_version}")
+
+        #     # if not to_prod and hbase_version:
+        #     #     # release version is higher
+        #     #     if not hbase_release['version'] > hbase_version:
+        #     #         logger.info("Already the latest version")
+        #     #         fsm_state = _FSM.ENDED
+        #     #         continue
+
+        #     #     # release has a higher api version
+        #     #     if not hbase_release['api'] > hbase_api_version:
+        #     #         logger.info("")
+        #     #         fsm_state = _FSM.ENDED
+        #     #         continue
+
+        #     #     # or higher hinstall version
+        #     #     if not hbase_release['hinstall'] > tuple(hbase_version[1:]):
+        #     #         fsm_state = _FSM.ENDED
+        #     #         continue
+
+        #     if to_prod or not is_in_dev:
+
+        #         # Download and extract archive
+        #         archive_url = hbase_release['url']
+        #         archive_filename = os.path.basename(archive_url)
+
+        #         with tempfile.TemporaryDirectory() as temp_dir:
+        #             temp_dir_path = Path(temp_dir)
+        #             temp_dir_path.mkdir(exist_ok=True)
+        #             archive_path = temp_dir_path / archive_filename
+
+        #             # Verify if the destination path is accessible
+        #             if not temp_dir_path.exists():
+        #                 logger.error(f"Temporary directory {temp_dir_path} does not exist.")
+        #                 return False
+
+        #             # Download
+        #             retry: int = 3
+        #             success: bool = False
+        #             while not success and retry:
+        #                 try:
+        #                     success = download_file(url=archive_url, filepath=archive_path)
+        #                 except:
+        #                     logger.debug(f"retry")
+        #                     pass
+        #             if not success:
+        #                 logger.error(f"Failed to download {archive_url}")
+        #                 sys.exit(-1)
+
+        #             # Remove the modules that will be installed: hwss, hinstall
+        #             # for module in ("hwss", "hinstall"):
+        #             #     module_dir = hbase_dir / "modules" / module
+        #             #     try:
+        #             #         shutil.rmtree(module_dir)
+        #             #     except:
+        #             #         pass
+
+        #             # Extract
+        #             try:
+        #                 extract_filtered_lib(
+        #                     archive_path=archive_path,
+        #                     hbase_dir=hbase_dir,
+        #                     force_prod=to_prod
+        #                 )
+        #             except Exception as e:
+        #                 logger.error(f"failed to install hbase. {str(e)}")
+        #                 sys.exit(-1)
+
+        #             # Because a new version has been installed, restart
+        #             restart = True
+
+        #     fsm_state = _FSM.ENDED
+
+
+        # elif fsm_state == _FSM.ENDED:
+        #     break
 
     return restart
