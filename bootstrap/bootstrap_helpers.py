@@ -409,16 +409,18 @@ def install_hbase(
 
     do_install: bool = to_prod or not is_in_dev
 
-    if not do_install:
-        return
-
     # Remove hbase_dir / bootstrap*:
     if hbase_dir.exists():
         for item in hbase_dir.iterdir():
             if item.name.startswith("bootstrap"):
+                if not do_install:
+                    logger.debug(f"Remove {item.name}")
+                    continue
+
                 if item.is_symlink():
                     logger.debug(f"Removing symlink {item.name}")
                     item.unlink()
+
                 elif not is_in_dev:
                     logger.debug(f"Removing file {item.name}")
                     if item.is_dir():
@@ -428,14 +430,19 @@ def install_hbase(
 
     modules = ("hwss", "hinstall")
     modules_dir = hbase_dir / "modules"
-    
+
     if modules_dir.exists():
         for m in modules:
             module_path = modules_dir / m
             if module_path.exists():
+                if not do_install:
+                    logger.debug(f"Remove {module_path}")
+                    continue
+
                 if module_path.is_symlink():
                     logger.debug(f"Removing symlink {module_path}")
                     module_path.unlink()
+
                 elif not is_in_dev:
                     logger.debug(f"Removing directory {module_path}")
                     if module_path.is_dir():
@@ -446,14 +453,14 @@ def install_hbase(
     # Install hbase_dir / bootstrap*:
     # Extract the bootstrap* and modules from the archive: filter by platform
     logger.info(f"Extracting {archive_path} to {hbase_dir}")
-    
+
     # Define extensions to exclude (other platforms)
     excluded_exts = {ext for p, ext in platform_lib_ext.items() if ext != lib_ext}
-    
+
     def should_extract(member: tarfile.TarInfo) -> bool:
         if member.isdir():
             return True
-        
+
         name = member.name.lower()
         # Check if it ends with an excluded extension
         for ext in excluded_exts:
@@ -475,11 +482,18 @@ def install_hbase(
 
         # Extract non-bootstrap files first
         if other_members:
-            tar.extractall(path=hbase_dir, members=other_members)
+            if not do_install:
+                logger.debug(f"Install\n  {"\n  ".join(other_members)}")
+            else:
+                tar.extractall(path=hbase_dir, members=other_members)
 
         # Extract bootstrap files last (as a completion flag)
         if bootstrap_members:
-            tar.extractall(path=hbase_dir, members=bootstrap_members)
+            if not do_install:
+                logger.debug(f"Install\n  {"\n  ".join(bootstrap_members)}")
+            else:
+                tar.extractall(path=hbase_dir, members=bootstrap_members)
+
 
 
 
