@@ -13,6 +13,7 @@ import tarfile
 import tempfile
 import time
 import requests
+import shutil
 import sys
 import urllib
 from urllib.error import (
@@ -155,10 +156,9 @@ def get_installed_apps(app_install_dir: Path) -> dict[str, tuple[int, int]]:
 
 
 
-def get_releases() -> list[dict[str, str | tuple]]:
+def get_releases(timeout: float = 4.) -> list[dict[str, str | tuple]]:
     url = "https://api.github.com/repos/herlegon/hbase/releases"
     retry: int = 3
-    timeout: float = 4
 
     response = [None]
     def _get_response():
@@ -175,13 +175,13 @@ def get_releases() -> list[dict[str, str | tuple]]:
             break
         logger.debug(f"Retry")
         retry -= 1
-        time.sleep(1)
+        time.sleep(0.5)
 
     if response[0] is None:
         logger.warning(f"failed to fetch the list of release.")
         return []
 
-    response_releases = response[0].json()
+    response_releases: dict = response[0].json()
 
     # Pattern: hbase-{api}.{hinstall_major}.{hinstall_minor}.tar.gz
     pattern = r"hbase-(\d+)\.(\d+)\.(\d+)\.tar\.gz"
@@ -204,22 +204,38 @@ def get_releases() -> list[dict[str, str | tuple]]:
 
 def find_latest_hbase_for_api(
     releases: list,
-    api: int = 0
+    api: int = 0,
+    major: int = 0,
 ) -> dict[str, str | tuple] | None:
-    # Sort by version tuple in descending order to get the latest
-    latest_overall = max(releases, key=lambda r: r['version'])
-    if api == 0:
-        return latest_overall
-    matching_releases = [
-        release for release in releases
-        if release['version'][0] == api
-    ]
-    if not matching_releases:
-        if api == 2:
-            return latest_overall
-        return None
+    # Helper to extract components for sorting/filtering
+    # Returns (api, major, minor, bootstrap)
+    def get_components(r):
+        v = r['version']
+        return (v[0], v[2][0], v[2][1], v[1])
 
-    return max(matching_releases, key=lambda r: r['version'])
+    # Filter by API
+    if api != 0:
+        releases = [r for r in releases if r['version'][0] == api]
+        if not releases:
+            return None
+    else:
+        # Find latest API
+        max_api = max(releases, key=lambda r: r['version'][0])['version'][0]
+        releases = [r for r in releases if r['version'][0] == max_api]
+
+    # Filter by Major
+    if major != 0:
+        releases = [r for r in releases if r['version'][2][0] == major]
+        if not releases:
+            return None
+    else:
+        # Find latest Major within the filtered releases
+        max_major = max(releases, key=lambda r: r['version'][2][0])['version'][2][0]
+        releases = [r for r in releases if r['version'][2][0] == max_major]
+
+    # Sort by (api, major, minor, bootstrap) descending.
+    # This prioritizes minor version over bootstrap version.
+    return max(releases, key=get_components)
 
 
 
@@ -367,17 +383,13 @@ def prepare_for_fresh_install(python_dir: Path):
 
 
 
-def extract_filtered_lib(
+def install_hbase(
     archive_path: Path,
     hbase_dir: Path,
-    force_prod: bool = False
+    is_in_dev: bool,
+    to_prod: bool = False
 ):
-    """
-    Extract files from the tar.gz archive to the target directory,
-    skipping files that are specific to other platforms.
-    """
-    # Define platform-specific file extensions
-    platform_files = {
+    platform_lib_ext = {
         'linux': '.so',
         'darwin': '.dylib',
         'win32': '.pyd',
@@ -386,48 +398,91 @@ def extract_filtered_lib(
     # Detect current platform
     platform = sys.platform.lower()
     if platform.startswith('linux'):
-        current_ext = platform_files['linux']
+        lib_ext = platform_lib_ext['linux']
     elif platform.startswith('darwin'):
-        current_ext = platform_files['darwin']
+        lib_ext = platform_lib_ext['darwin']
     elif platform.startswith('win'):
-        current_ext = platform_files['win32']
+        lib_ext = platform_lib_ext['win32']
     else:
         logger.error(f"Unsupported platform: {platform}")
         sys.exit(-1)
 
-    # Check if we're in dev mode (symlink detected) and not forcing prod install
-    bootstrap_script: Path = hbase_dir / "bootstrap.py"
-    is_dev_mode: bool = bootstrap_script.is_symlink() and not force_prod
-    if is_dev_mode:
-        # Extract to a separate binaries directory instead
-        extraction_dir = hbase_dir / "tmp"
-        extraction_dir.mkdir(parents=True, exist_ok=True)
-        logger.info(f"Dev mode detected (symlink): extracting binaries to {extraction_dir}")
+    do_install: bool = to_prod or not is_in_dev
 
-        # Add this directory to sys.path if not already there
-        if str(extraction_dir.parent) not in sys.path:
-            sys.path.insert(0, str(extraction_dir.parent))
-            logger.debug(f"Added {extraction_dir.parent} to sys.path")
+    if not do_install:
+        return
 
-    else:
-        # Prod mode: extract directly to the target
-        extraction_dir = hbase_dir
-        extraction_dir.mkdir(parents=True, exist_ok=True)
-        logger.info(f"Prod mode: extracting to {extraction_dir}")
+    # Remove hbase_dir / bootstrap*:
+    if hbase_dir.exists():
+        for item in hbase_dir.iterdir():
+            if item.name.startswith("bootstrap"):
+                if item.is_symlink():
+                    logger.debug(f"Removing symlink {item.name}")
+                    item.unlink()
+                elif not is_in_dev:
+                    logger.debug(f"Removing file {item.name}")
+                    if item.is_dir():
+                        shutil.rmtree(item)
+                    else:
+                        item.unlink()
 
-    # Extract files, skipping other platform-specific files
-    with tarfile.open(archive_path, 'r:gz') as tar_file:
-        for member in tar_file.getmembers():
-            # Skip files that match platform extensions of other platforms
-            skip: bool = False
-            for ext in platform_files.values():
-                if ext != current_ext and member.name.endswith(ext):
-                    skip = True
-                    logger.debug(f"Skipping {member.name} (not for this platform)")
-                    break
+    modules = ("hwss", "hinstall")
+    modules_dir = hbase_dir / "modules"
+    
+    if modules_dir.exists():
+        for m in modules:
+            module_path = modules_dir / m
+            if module_path.exists():
+                if module_path.is_symlink():
+                    logger.debug(f"Removing symlink {module_path}")
+                    module_path.unlink()
+                elif not is_in_dev:
+                    logger.debug(f"Removing directory {module_path}")
+                    if module_path.is_dir():
+                        shutil.rmtree(module_path)
+                    else:
+                        module_path.unlink()
 
-            if not skip:
-                tar_file.extract(member, path=extraction_dir)
+    # Install hbase_dir / bootstrap*:
+    # Extract the bootstrap* and modules from the archive: filter by platform
+    logger.info(f"Extracting {archive_path} to {hbase_dir}")
+    
+    # Define extensions to exclude (other platforms)
+    excluded_exts = {ext for p, ext in platform_lib_ext.items() if ext != lib_ext}
+    
+    def should_extract(member: tarfile.TarInfo) -> bool:
+        if member.isdir():
+            return True
+        
+        name = member.name.lower()
+        # Check if it ends with an excluded extension
+        for ext in excluded_exts:
+            if name.endswith(ext):
+                return False
+        return True
+
+    with tarfile.open(archive_path, "r:gz") as tar:
+        members = [m for m in tar.getmembers() if should_extract(m)]
+
+        bootstrap_members = []
+        other_members = []
+
+        for m in members:
+            if os.path.basename(m.name).startswith("bootstrap"):
+                bootstrap_members.append(m)
+            else:
+                other_members.append(m)
+
+        # Extract non-bootstrap files first
+        if other_members:
+            tar.extractall(path=hbase_dir, members=other_members)
+
+        # Extract bootstrap files last (as a completion flag)
+        if bootstrap_members:
+            tar.extractall(path=hbase_dir, members=bootstrap_members)
+
+
+
 
 
 
@@ -515,7 +570,7 @@ def fsm(
             return restart
 
     # If not release found: when github is down or wrong server
-    releases = get_releases()
+    releases = get_releases(timeout=2)
     if not releases:
         logger.error("No release found")
         if not is_hbase_installed:
@@ -622,20 +677,13 @@ def fsm(
                 logger.critical(f"Failed to download {archive_url}")
                 sys.exit(-1)
 
-            # Remove the modules that will be installed: hwss, hinstall
-            # for module in ("hwss", "hinstall"):
-            #     module_dir = hbase_dir / "modules" / module
-            #     try:
-            #         shutil.rmtree(module_dir)
-            #     except:
-            #         pass
-
-            # Extract
+            # Install
             try:
-                extract_filtered_lib(
+                install_hbase(
                     archive_path=archive_path,
                     hbase_dir=hbase_dir,
-                    force_prod=to_prod
+                    is_in_dev=is_in_dev,
+                    to_prod=to_prod
                 )
             except Exception as e:
                 logger.error(f"failed to install hbase. {str(e)}")

@@ -193,3 +193,32 @@ python/
 │   │   ├── py_package.py     <- needs to import hwss/api.py
 │   │   ├── ...
 ```
+
+
+# Installation
+    # Remove hbase_dir / bootstrap*:
+    # if they are symlink and do_install:
+    #     remove link
+    #     elif not is_in_dev:
+    #         remove files: they maybe be .py or .pyx or .so etc...
+    # for m in modules:
+    #       module_path = hbase_dir/ "modules" / m
+    #       if current modules are symlink and do_install:
+    #           currently in dev, remove the link because we are switching to prod
+    #
+    #       elif not is_in_dev:
+    #           (because do not delete if we are in dev)
+    #           delete the directory and its content
+    #
+    #       if do_install:
+    #           Already in prod or switching to prod
+    #           Create the module directory
+    #           Extract the modules from the archive: filter by platform
+    #           Also extract the .py /.pyx of this module
+
+    # Install hbase_dir / bootstrap*:
+    # if do_install:
+    #     extract the bootstrap* from the archive: filter by platform
+    #         Extract the modules from the archive: filter by platform
+    #         Also extract the .py /.pyx of this module
+    # Extract the bootstrap* and modules from the archive: filter by platform
