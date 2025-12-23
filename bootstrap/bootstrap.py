@@ -8,7 +8,7 @@ import signal
 import sys
 import time
 
-__version__ = 1
+__version__ = 2
 
 # CRITICAL: Add modules to sys.path FIRST, before any other imports that might use it
 python_root = Path(__file__).parent
@@ -83,7 +83,7 @@ def main():
             sys.exit(1)
 
     # When restarting
-    if args.restart_iter >= 3:
+    if args.restart_iter >= 2:
         sys.stdout.flush()
         sys.exit(1)
 
