@@ -127,7 +127,7 @@ def main():
         return
 
     logger.info(f"App: {app}")
-    logger.debug(f"Dev to production: {args.to_prod}")
+    logger.info(f"Dev to production: {args.to_prod}")
     logger.info(f"Directories:")
     logger.info(f"  hbase dir: {hbase_dir}")
     logger.info(f"  Modules: {module_dir}")
