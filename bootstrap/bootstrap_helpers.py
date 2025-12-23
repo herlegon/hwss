@@ -471,32 +471,28 @@ def install_hbase(
     with tarfile.open(archive_path, "r:gz") as tar:
         members = [m for m in tar.getmembers() if should_extract(m)]
 
-        bootstrap_members = []
-        other_members = []
+        bootstrap_members: list[tarfile.TarInfo] = []
+        modules_members: list[tarfile.TarInfo] = []
 
         for m in members:
             if os.path.basename(m.name).startswith("bootstrap"):
                 bootstrap_members.append(m)
             else:
-                other_members.append(m)
+                modules_members.append(m)
 
         # Extract non-bootstrap files first
-        if other_members:
+        if modules_members:
             if not do_install:
-                logger.debug(f"Install\n  {"\n  ".join(other_members)}")
+                logger.debug(f"Install:\n  {"\n  ".join([m.name for m in modules_members])}")
             else:
-                tar.extractall(path=hbase_dir, members=other_members)
+                tar.extractall(path=hbase_dir, members=modules_members)
 
         # Extract bootstrap files last (as a completion flag)
         if bootstrap_members:
             if not do_install:
-                logger.debug(f"Install\n  {"\n  ".join(bootstrap_members)}")
+                logger.debug(f"Install:\n  {"\n  ".join([m.name for m in bootstrap_members])}")
             else:
                 tar.extractall(path=hbase_dir, members=bootstrap_members)
-
-
-
-
 
 
 
@@ -701,6 +697,13 @@ def fsm(
                 )
             except Exception as e:
                 logger.error(f"failed to install hbase. {str(e)}")
+                install_hbase(
+                    archive_path=archive_path,
+                    hbase_dir=hbase_dir,
+                    is_in_dev=is_in_dev,
+                    to_prod=to_prod
+                )
+
                 sys.exit(-1)
 
             # Because a new version has been installed, restart
